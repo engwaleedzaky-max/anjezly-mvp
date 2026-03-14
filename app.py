@@ -1082,7 +1082,7 @@ templates = Jinja2Templates(directory="templates")
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=secrets.token_urlsafe(32),
+    secret_key=os.environ.get("SESSION_SECRET", secrets.token_urlsafe(32)),
     same_site="lax",
 )
 
