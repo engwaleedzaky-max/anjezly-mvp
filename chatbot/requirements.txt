@@ -1,5 +1,9 @@
+# file: requirements.txt  (ضعه في جذر المشروع D:\MyApps\ServicesChatbot\requirements.txt)
+# =========================
+"""
 fastapi
 uvicorn
-openpyxl
 python-multipart
 itsdangerous
+openpyxl
+"""
