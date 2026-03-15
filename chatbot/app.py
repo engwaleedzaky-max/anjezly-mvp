@@ -1,13 +1,10 @@
 # file: app.py
 """
 Anjezly - Web Chatbot MVP (Bilingual UI + Full Shield Logo + Start over to Language + Back)
-- Landing message bilingual (Arabic + English): brand + slogan + language prompt
-- Buttons bilingual: Admin Panel, Send, Back, Start over
-- Start over always returns to language selection
-- Admin PIN = 4321 (or env ADMIN_PIN)
-- Customer flow saves to requests.xlsx
-- Provider flow saves to providers.xlsx
-- Back: one step back
+Fixes:
+- Show clear validation messages instead of "feels like repeating"
+- Allow shorter details (min 3 chars)
+- Show numeric quick-buttons (1..9) only during menu steps (lang/role/category/service)
 """
 
 from __future__ import annotations
@@ -37,16 +34,19 @@ SLOGAN_EN = "Request it, and we’ll get it done."
 REQUESTS_XLSX = Path("requests.xlsx")
 PROVIDERS_XLSX = Path("providers.xlsx")
 
-# ✅ Admin PIN
 ADMIN_PIN = os.environ.get("ADMIN_PIN", "4321")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_urlsafe(32))
 
 Lang = Literal["ar", "en"]
 Role = Literal["customer", "provider"]
 
-# UI internal commands
 CMD_BACK = "__back__"
 CMD_RESTART = "__restart__"
+
+MIN_NAME = 2
+MIN_ADDRESS = 3
+MIN_DETAILS = 3  # ✅ was 5
+
 
 # -----------------------------
 # Menus (Arabic + English)
@@ -147,7 +147,6 @@ TXT = {
         "use_buttons": "استخدم زر (رجوع) أو (Start over).",
         "invalid_choice": "اختيار غير صحيح.",
         "customer_title": "✅ أنت طالب خدمة.",
-        "provider_title": "✅ أنت مقدم خدمة.",
         "category_prompt": "اختر القسم بكتابة رقم:",
         "service_prompt": "اختر الخدمة بكتابة رقم:",
         "enter_name": "اكتب اسمك:",
@@ -155,9 +154,9 @@ TXT = {
         "enter_address": "اكتب العنوان / المنطقة:",
         "enter_details": "اكتب تفاصيل الطلب:",
         "phone_invalid": "رقم غير صحيح. مثال: 01012345678",
-        "too_short_name": "الاسم قصير جدًا. اكتب اسمك مرة أخرى:",
-        "too_short_addr": "العنوان قصير جدًا. اكتب العنوان/المنطقة مرة أخرى:",
-        "too_short_details": "التفاصيل قصيرة جدًا. اكتب تفاصيل أكثر:",
+        "too_short_name": "⚠️ الاسم قصير. اكتب اسمك مرة أخرى:",
+        "too_short_addr": "⚠️ العنوان قصير. اكتب العنوان/المنطقة مرة أخرى:",
+        "too_short_details": "⚠️ التفاصيل قصيرة. اكتب تفاصيل أكثر (مثال: عدد الغرف، المنطقة، الميزانية...):",
         "saved_ok": "✅ تم تسجيل طلبك بنجاح!",
         "back_msg": "↩️ رجعنا خطوة للخلف.",
         "no_prev": "لا توجد خطوة سابقة.",
@@ -172,7 +171,6 @@ TXT = {
         "use_buttons": "Use (Back) or (Start over).",
         "invalid_choice": "Invalid choice.",
         "customer_title": "✅ You are a service requester.",
-        "provider_title": "✅ You are a service provider.",
         "category_prompt": "Choose a category (type a number):",
         "service_prompt": "Choose a service (type a number):",
         "enter_name": "Enter your name:",
@@ -180,9 +178,9 @@ TXT = {
         "enter_address": "Enter your area / address:",
         "enter_details": "Enter request details:",
         "phone_invalid": "Invalid phone. Example: 01012345678",
-        "too_short_name": "Name is too short. Please enter again:",
-        "too_short_addr": "Address is too short. Please enter again:",
-        "too_short_details": "Details are too short. Please add more:",
+        "too_short_name": "⚠️ Name is too short. Please enter again:",
+        "too_short_addr": "⚠️ Address is too short. Please enter again:",
+        "too_short_details": "⚠️ Details are too short. Add more (area, budget, specifics...):",
         "saved_ok": "✅ Your request has been submitted!",
         "back_msg": "↩️ Went back one step.",
         "no_prev": "No previous step.",
@@ -217,7 +215,6 @@ class ChatState:
     role: Optional[Role] = None
     step: Step = "lang"
 
-    # customer
     category_key: str = ""
     category_name: str = ""
     service_key: str = ""
@@ -227,7 +224,6 @@ class ChatState:
     address: str = ""
     details: str = ""
 
-    # provider
     p_name: str = ""
     p_phone: str = ""
     p_profession: str = ""
@@ -300,7 +296,8 @@ def get_history(request: Request) -> list[dict[str, Any]]:
 
 
 def set_history(request: Request, history: list[dict[str, Any]]) -> None:
-    request.session["chat_history"] = history
+    # ✅ keep history small to avoid large cookies
+    request.session["chat_history"] = history[-20:]
 
 
 def clear_chat(request: Request) -> None:
@@ -512,28 +509,37 @@ def handle_back(request: Request) -> str:
     return "↩️ Back.\n\n" + prompt_for_step(prev)
 
 
-def bot_reply(request: Request, user_text: str) -> str:
+def wants_restart(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return t in {"start over", "restart", "#", "ابدأ", "ابدا", "start", "menu", "reset", "إلغاء", "الغاء"}
+
+
+def should_show_chips(step: Step) -> bool:
+    # ✅ show 1..9 only in menu steps
+    return step in {"lang", "role", "main_menu", "sub_menu"}
+
+
+def bot_reply(request: Request, user_text: str) -> tuple[str, bool]:
     text = normalize_text(user_text)
     state = get_state(request)
 
     if text == CMD_BACK:
-        return handle_back(request)
-    if text == CMD_RESTART:
-        return handle_restart_to_language(request)
+        return handle_back(request), should_show_chips(get_state(request).step)
 
-    if text.lower() in {"start over", "restart", "#", "ابدأ", "ابدا", "start", "menu", "reset", "إلغاء", "الغاء"}:
-        return handle_restart_to_language(request)
+    if text == CMD_RESTART or wants_restart(text):
+        msg = handle_restart_to_language(request)
+        return msg, True
 
     # language step
     if state.step == "lang" or state.lang is None:
         chosen = choose_lang(text)
         if not chosen:
-            return "Invalid choice / اختيار غير صحيح.\n\n" + prompt_language_bilingual()
+            return "Invalid choice / اختيار غير صحيح.\n\n" + prompt_language_bilingual(), True
         push_history(request, state)
         state.lang = chosen
         state.step = "role"
         set_state(request, state)
-        return prompt_role(chosen)
+        return prompt_role(chosen), True
 
     lang = state.lang
 
@@ -541,70 +547,71 @@ def bot_reply(request: Request, user_text: str) -> str:
     if state.step == "role":
         chosen = choose_role(text)
         if not chosen:
-            return TXT[lang]["invalid_choice"] + "\n\n" + prompt_role(lang)
+            return TXT[lang]["invalid_choice"] + "\n\n" + prompt_role(lang), True
         push_history(request, state)
         state.role = chosen
         state.step = "main_menu" if chosen == "customer" else "p_name"
         set_state(request, state)
-        return prompt_for_step(state)
+        return prompt_for_step(state), should_show_chips(state.step)
 
     # customer flow
     if state.role == "customer":
         if state.step == "main_menu":
             cat_key = choose_category(lang, text)
             if not cat_key:
-                return TXT[lang]["invalid_choice"] + "\n\n" + prompt_main_menu(lang)
+                return TXT[lang]["invalid_choice"] + "\n\n" + prompt_main_menu(lang), True
             push_history(request, state)
             main, _ = menu_for(lang)
             state.category_key = cat_key
             state.category_name = main[cat_key]
             state.step = "sub_menu"
             set_state(request, state)
-            return prompt_sub_menu(lang, cat_key)
+            return prompt_sub_menu(lang, cat_key), True
 
         if state.step == "sub_menu":
             svc_key = choose_service(lang, state.category_key, text)
             if not svc_key:
-                return TXT[lang]["invalid_choice"] + "\n\n" + prompt_sub_menu(lang, state.category_key)
+                return TXT[lang]["invalid_choice"] + "\n\n" + prompt_sub_menu(lang, state.category_key), True
             push_history(request, state)
             _, sub = menu_for(lang)
             state.service_key = svc_key
             state.service_name = sub[state.category_key][svc_key]
             state.step = "name"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "name":
-            if len(text) < 2:
-                return TXT[lang]["too_short_name"]
+            if len(text) < MIN_NAME:
+                return TXT[lang]["too_short_name"], False
             push_history(request, state)
             state.name = text
             state.step = "phone"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "phone":
             phone = validate_phone(text)
             if not phone:
-                return TXT[lang]["phone_invalid"]
+                return TXT[lang]["phone_invalid"], False
             push_history(request, state)
             state.phone = phone
             state.step = "address"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "address":
-            if len(text) < 3:
-                return TXT[lang]["too_short_addr"]
+            if len(text) < MIN_ADDRESS:
+                return TXT[lang]["too_short_addr"], False
             push_history(request, state)
             state.address = text
             state.step = "details"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "details":
-            if len(text) < 5:
-                return TXT[lang]["too_short_details"]
+            if len(text) < MIN_DETAILS:
+                return TXT[lang]["too_short_details"], False
+
             state.details = text
             save_request_to_excel(state)
 
@@ -616,53 +623,54 @@ def bot_reply(request: Request, user_text: str) -> str:
                 f"{TXT[lang]['enter_address']} {state.address}\n"
                 f"{TXT[lang]['enter_details']} {state.details}\n\n"
             )
-            return confirmation + handle_restart_to_language(request)
+            msg = confirmation + handle_restart_to_language(request)
+            return msg, True
 
-        return handle_restart_to_language(request)
+        msg = handle_restart_to_language(request)
+        return msg, True
 
     # provider flow
     if state.role == "provider":
         if state.step == "p_name":
-            if len(text) < 2:
-                return TXT[lang]["too_short_name"]
+            if len(text) < MIN_NAME:
+                return TXT[lang]["too_short_name"], False
             push_history(request, state)
             state.p_name = text
             state.step = "p_phone"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "p_phone":
             phone = validate_phone(text)
             if not phone:
-                return TXT[lang]["phone_invalid"]
+                return TXT[lang]["phone_invalid"], False
             push_history(request, state)
             state.p_phone = phone
             state.step = "p_profession"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "p_profession":
             if len(text) < 2:
-                return TXT[lang]["invalid_choice"] + "\n\n" + TXT[lang]["provider_profession"]
+                return TXT[lang]["invalid_choice"] + "\n\n" + TXT[lang]["provider_profession"], False
             push_history(request, state)
             state.p_profession = text
             state.step = "p_contrib"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "p_contrib":
             if len(text) < 2:
-                return TXT[lang]["invalid_choice"] + "\n\n" + TXT[lang]["provider_contrib"]
+                return TXT[lang]["invalid_choice"] + "\n\n" + TXT[lang]["provider_contrib"], False
             push_history(request, state)
             state.p_contrib = text
             state.step = "p_home"
             set_state(request, state)
-            return prompt_for_step(state)
+            return prompt_for_step(state), False
 
         if state.step == "p_home":
             state.p_home = text if text else ("none" if lang == "en" else "لا يوجد")
             save_provider_to_excel(state)
-
             msg = (
                 f"{TXT[lang]['provider_saved']}\n\n"
                 f"{TXT[lang]['enter_name']} {state.p_name}\n"
@@ -671,15 +679,18 @@ def bot_reply(request: Request, user_text: str) -> str:
                 f"{TXT[lang]['provider_contrib']} {state.p_contrib}\n"
                 f"{TXT[lang]['provider_home']} {state.p_home}\n\n"
             )
-            return msg + handle_restart_to_language(request)
+            msg = msg + handle_restart_to_language(request)
+            return msg, True
 
-        return handle_restart_to_language(request)
+        msg = handle_restart_to_language(request)
+        return msg, True
 
-    return handle_restart_to_language(request)
+    msg = handle_restart_to_language(request)
+    return msg, True
 
 
 # -----------------------------
-# Web UI (no f-string JS issues)
+# Web UI
 # -----------------------------
 HTML_TEMPLATE = r"""<!doctype html>
 <html lang="ar" dir="rtl">
@@ -692,7 +703,6 @@ HTML_TEMPLATE = r"""<!doctype html>
     .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
     .header { display:flex; justify-content: space-between; align-items:center; gap:12px; }
     .brand { display:flex; align-items:center; gap:14px; }
-    /* Logo is 3x bigger than old (42 -> 126) */
     .logo { width:126px; height:126px; border-radius:28px; background: rgba(22,163,74,.12);
             display:flex; align-items:center; justify-content:center; overflow:hidden; }
     .logo svg { width:92px; height:92px; }
@@ -716,6 +726,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     .chip { padding: 8px 10px; border-radius: 999px; background: rgba(255,255,255,.08);
             border: 1px solid rgba(255,255,255,.10); cursor:pointer; font-weight:800; }
     .chip:hover { background: rgba(255,255,255,.12); }
+    .hide { display:none !important; }
   </style>
 </head>
 <body>
@@ -723,7 +734,6 @@ HTML_TEMPLATE = r"""<!doctype html>
     <div class="header">
       <div class="brand">
         <div class="logo" aria-label="Logo">
-          <!-- Full Shield (fills the icon more) -->
           <svg viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M64 6c21 16 40 20 54 23v39c0 34-20 52-54 60C30 120 10 102 10 68V29c14-3 33-7 54-23Z"
                   fill="rgba(22,163,74,.20)" stroke="rgba(226,232,240,.92)" stroke-width="5" stroke-linejoin="round"/>
@@ -753,7 +763,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         <button id="restart" class="btn-restart" title="Start over / بدء من جديد">Start over / بدء من جديد</button>
       </div>
 
-      <div class="chips">
+      <div id="chips" class="chips">
         <div class="chip" data-text="1">1</div><div class="chip" data-text="2">2</div><div class="chip" data-text="3">3</div>
         <div class="chip" data-text="4">4</div><div class="chip" data-text="5">5</div><div class="chip" data-text="6">6</div>
         <div class="chip" data-text="7">7</div><div class="chip" data-text="8">8</div><div class="chip" data-text="9">9</div>
@@ -770,6 +780,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   const send = document.getElementById("send");
   const back = document.getElementById("back");
   const restart = document.getElementById("restart");
+  const chips = document.getElementById("chips");
 
   function addBubble(text, who) {
     const div = document.createElement("div");
@@ -777,6 +788,10 @@ HTML_TEMPLATE = r"""<!doctype html>
     div.textContent = text;
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
+  }
+
+  function setChipsVisible(visible) {
+    chips.classList.toggle("hide", !visible);
   }
 
   async function postText(text) {
@@ -797,6 +812,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     try {
       const data = await postText(text);
       addBubble(data.reply, "bot");
+      setChipsVisible(!!data.show_chips);
     } catch (e) {
       addBubble("Error. / حدث خطأ.", "bot");
     } finally {
@@ -811,6 +827,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       addBubble("Back / رجوع", "me");
       const data = await postText(CMD_BACK);
       addBubble(data.reply, "bot");
+      setChipsVisible(!!data.show_chips);
     } catch (e) {
       addBubble("Error. / حدث خطأ.", "bot");
     } finally {
@@ -825,6 +842,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       addBubble("Start over / بدء من جديد", "me");
       const data = await postText(CMD_RESTART);
       addBubble(data.reply, "bot");
+      setChipsVisible(!!data.show_chips);
     } catch (e) {
       addBubble("Error. / حدث خطأ.", "bot");
     } finally {
@@ -841,15 +859,14 @@ HTML_TEMPLATE = r"""<!doctype html>
   document.querySelectorAll(".chip").forEach(el => {
     el.addEventListener("click", () => sendMessage(el.dataset.text));
   });
+
+  // initial: chips should be visible on language step
+  setChipsVisible(true);
 </script>
 </body>
 </html>
 """
 
-
-# -----------------------------
-# FastAPI
-# -----------------------------
 app = FastAPI(title=f"{BRAND_EN} | {BRAND_AR}")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
 
@@ -879,8 +896,8 @@ def chat_page(request: Request) -> str:
 
 @app.post("/api/message")
 def api_message(request: Request, text: str = Form(...)) -> JSONResponse:
-    reply = bot_reply(request, text)
-    return JSONResponse({"reply": reply})
+    reply, show_chips = bot_reply(request, text)
+    return JSONResponse({"reply": reply, "show_chips": show_chips})
 
 
 @app.get("/admin", response_class=HTMLResponse)
