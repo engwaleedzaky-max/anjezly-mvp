@@ -1,122 +1,151 @@
-# notify.py
+# file: notify.py
 from __future__ import annotations
 
 import os
 import smtplib
 import ssl
+from email.message import EmailMessage
+from typing import Optional
+
+# Telegram optional (لو مش عايزه الآن سيظل معطّل بدون env vars)
+import json
 import urllib.parse
 import urllib.request
-from email.mime.text import MIMEText
+
+from models import ChatState
+
+BRAND_AR = os.getenv("BRAND_AR", "أنجزلي")
 
 
 def _env(name: str, default: str = "") -> str:
-    v = os.getenv(name, default)
-    return (v or "").strip()
+    v = os.getenv(name)
+    return v.strip() if isinstance(v, str) else default
+
+
+def _safe(x: Optional[str]) -> str:
+    return (x or "").strip()
 
 
 def _send_email(subject: str, body: str) -> None:
     """
-    Sends email via SMTP (Gmail recommended).
-    Required env vars:
-      SMTP_HOST=smtp.gmail.com
-      SMTP_PORT=587
-      SMTP_USER=your_gmail@gmail.com
-      SMTP_PASS=app_password_16_chars
-      EMAIL_FROM=your_gmail@gmail.com   (optional; defaults to SMTP_USER)
-      NOTIFY_EMAIL_TO=receiver@gmail.com (can be same)
+    Gmail:
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587 (STARTTLS) أو 465 (SSL)
+      - SMTP_USER=anjezly01@gmail.com
+      - SMTP_PASS=App Password (16 chars)
+      - EMAIL_FROM=anjezly01@gmail.com
+      - NOTIFY_EMAIL_TO=yourtarget@email.com (ممكن نفس الإيميل)
     """
-    smtp_host = _env("SMTP_HOST", "smtp.gmail.com")
+    smtp_host = _env("SMTP_HOST", "")
     smtp_port = int(_env("SMTP_PORT", "587") or "587")
-    smtp_user = _env("SMTP_USER")
-    smtp_pass = _env("SMTP_PASS")
-    email_from = _env("EMAIL_FROM") or smtp_user
-    email_to = _env("NOTIFY_EMAIL_TO")
+    smtp_user = _env("SMTP_USER", "")
+    smtp_pass = _env("SMTP_PASS", "")
+    email_from = _env("EMAIL_FROM", smtp_user)
+    email_to = _env("NOTIFY_EMAIL_TO", "")
 
-    if not (smtp_user and smtp_pass and email_to):
-        print(
-            "[EMAIL] Missing env vars. Need SMTP_USER, SMTP_PASS, NOTIFY_EMAIL_TO "
-            f"(got SMTP_USER={bool(smtp_user)}, SMTP_PASS={bool(smtp_pass)}, NOTIFY_EMAIL_TO={bool(email_to)})"
-        )
+    if not (smtp_host and smtp_user and smtp_pass and email_from and email_to):
+        print("[EMAIL] Skipped: missing env vars (SMTP_HOST/SMTP_USER/SMTP_PASS/EMAIL_FROM/NOTIFY_EMAIL_TO).")
         return
 
-    msg = MIMEText(body, "plain", "utf-8")
+    msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = email_from
     msg["To"] = email_to
+    msg.set_content(body)
 
-    try:
+    if smtp_port == 465:
+        # SSL
         context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=20) as server:
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+    else:
+        # STARTTLS (587 recommended)
         with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
             server.ehlo()
-            # Gmail uses STARTTLS on 587
-            server.starttls(context=context)
+            server.starttls(context=ssl.create_default_context())
             server.ehlo()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        print("[EMAIL] Sent OK ->", email_to)
-    except Exception as e:
-        # ✅ IMPORTANT: do not crash the app
-        print("[EMAIL] ERROR:", repr(e))
+
+    print("[EMAIL] Sent OK to:", email_to)
 
 
 def _send_telegram(text: str) -> None:
-    """
-    Optional Telegram notification (free).
-    Env vars (optional):
-      TG_BOT_TOKEN=xxxxx
-      TG_CHAT_ID=123456789
-    """
-    token = _env("TG_BOT_TOKEN")
-    chat_id = _env("TG_CHAT_ID")
+    token = _env("TELEGRAM_BOT_TOKEN", "")
+    chat_id = _env("TELEGRAM_CHAT_ID", "")
     if not (token and chat_id):
+        # Telegram not configured
         return
 
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        payload = resp.read().decode("utf-8", errors="ignore")
+        obj = json.loads(payload)
+        if not obj.get("ok", False):
+            raise RuntimeError(f"Telegram API error: {payload}")
+
+    print("[TG] Sent OK")
+
+
+def notify_new_request(state: ChatState) -> None:
+    subject = f"{BRAND_AR} | طلب جديد"
+    body = "\n".join(
+        [
+            "📌 طلب جديد",
+            f"القسم: {_safe(state.category_name)}",
+            f"الخدمة: {_safe(state.service_name)}",
+            "",
+            f"الاسم: {_safe(state.name)}",
+            f"الهاتف: {_safe(state.phone)}",
+            f"العنوان: {_safe(state.address)}",
+            "",
+            f"التفاصيل: {_safe(state.details)}",
+        ]
+    )
+
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = urllib.parse.urlencode(
-            {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}
-        ).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
-        print("[TG] Sent OK")
+        _send_email(subject, body)
+    except Exception as e:
+        print("[EMAIL] ERROR:", repr(e))
+
+    try:
+        _send_telegram(body)
     except Exception as e:
         print("[TG] ERROR:", repr(e))
 
 
-def notify_new_request(payload: dict) -> None:
-    """
-    Call this after saving the request/provider.
-    payload example:
-      {"type":"request", "service":"...", "name":"...", "phone":"...", "address":"...", "details":"..."}
-    """
+def notify_new_provider(state: ChatState) -> None:
+    subject = f"{BRAND_AR} | مقدم خدمة جديد"
+    body = "\n".join(
+        [
+            "🧰 مقدم خدمة جديد",
+            f"الاسم: {_safe(state.p_name)}",
+            f"الهاتف: {_safe(state.p_phone)}",
+            f"المهنة: {_safe(state.p_profession)}",
+            f"يساهم بـ: {_safe(state.p_contrib)}",
+            f"من البيت: {_safe(state.p_home)}",
+        ]
+    )
+
     try:
-        kind = (payload.get("type") or "").strip() or "request"
-
-        if kind == "provider":
-            subject = "🚀 تسجيل مقدم خدمة جديد"
-            body = (
-                "تم تسجيل مقدم خدمة جديد:\n\n"
-                f"الاسم: {payload.get('name','')}\n"
-                f"الهاتف: {payload.get('phone','')}\n"
-                f"المهنة: {payload.get('profession','')}\n"
-                f"ماذا يضيف للفريق: {payload.get('contrib','')}\n"
-                f"ماذا يصنع من البيت: {payload.get('home','')}\n"
-            )
-        else:
-            subject = "🟢 طلب خدمة جديد"
-            body = (
-                "تم استلام طلب جديد:\n\n"
-                f"القسم: {payload.get('category','')}\n"
-                f"الخدمة: {payload.get('service','')}\n\n"
-                f"الاسم: {payload.get('name','')}\n"
-                f"الهاتف: {payload.get('phone','')}\n"
-                f"العنوان: {payload.get('address','')}\n"
-                f"التفاصيل: {payload.get('details','')}\n"
-            )
-
         _send_email(subject, body)
+    except Exception as e:
+        print("[EMAIL] ERROR:", repr(e))
+
+    try:
         _send_telegram(body)
     except Exception as e:
-        # ✅ never crash the app
-        print("[NOTIFY] ERROR:", repr(e))
+        print("[TG] ERROR:", repr(e))
+
+
+# aliases (لو bot.py يستورد أسماء مختلفة)
+notify_request = notify_new_request
+notify_provider = notify_new_provider
