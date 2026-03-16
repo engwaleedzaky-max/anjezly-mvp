@@ -1,5 +1,4 @@
-# file: chatbot_app/models.py
-# =========================
+# file: models.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +10,8 @@ Step = Literal[
     "role",
     "main_menu",
     "sub_menu",
+    "custom_cat_service",  # ✅ أخرى كقسم: سؤال واحد (قسم/خدمة)
+    "custom_service",      # ✅ أخرى كخدمة: سؤال واحد (اسم الخدمة)
     "name",
     "phone",
     "address",
@@ -62,6 +63,8 @@ class ChatState:
             "role",
             "main_menu",
             "sub_menu",
+            "custom_cat_service",
+            "custom_service",
             "name",
             "phone",
             "address",
