@@ -39,6 +39,34 @@ HTML_TEMPLATE = r"""<!doctype html>
             border: 1px solid rgba(255,255,255,.10); cursor:pointer; font-weight:800; }
     .chip:hover { background: rgba(255,255,255,.12); }
     .hide { display:none !important; }
+    .footer-ip{
+        position: fixed;
+        left: 12px;
+        bottom: 10px;
+        font-size: 12px;
+        color: #6b7280;
+        opacity: 0.9;
+        z-index: 9999;
+        text-align: left;
+        line-height: 1.2;
+      }
+  /* Copyright footer (always visible) */
+.copyright {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+  text-align: center;
+  line-height: 1.35;
+  z-index: 9999;
+  pointer-events: none;
+  user-select: none;
+}
+@media (max-width: 600px){
+  .copyright { font-size: 11px; bottom: 8px; }
+}
   </style>
 </head>
 <body>
@@ -174,6 +202,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   setChipsVisible(true);
 </script>
+<div class="footer-ip">
+  <div>© 2026 م/ وليد زكي</div>
+  <div>جميع الحقوق محفوظة.</div>
+</div>
+<div class="copyright">
+  <div>© 2026 — جميع الحقوق محفوظة</div>
+  <div>حقوق الملكية الفكرية مملوكة لمهندس وليد زكي</div>
+</div>
 </body>
 </html>
 """
