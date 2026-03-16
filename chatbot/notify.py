@@ -95,7 +95,7 @@ def notify_new_request(state: ChatState) -> None:
     try:
         _send_email(subject, body)
     except Exception:
-        pass
+        print("EMAIL ERROR:", repr(e))
 
     try:
         _send_telegram(body)
@@ -122,7 +122,7 @@ def notify_new_provider(state: ChatState) -> None:
     try:
         _send_email(subject, body)
     except Exception:
-        pass
+        print("EMAIL ERROR:", repr(e))
 
     try:
         _send_telegram(body)
