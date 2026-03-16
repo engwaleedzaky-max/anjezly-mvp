@@ -39,6 +39,14 @@ HTML_TEMPLATE = r"""<!doctype html>
             border: 1px solid rgba(255,255,255,.10); cursor:pointer; font-weight:800; }
     .chip:hover { background: rgba(255,255,255,.12); }
     .hide { display:none !important; }
+
+    /* ---- A) Wait bubble styles ---- */
+    .loading { display:inline-flex; gap:8px; align-items:center; font-size:13px; opacity:.85; }
+    .dot { width:6px; height:6px; border-radius:50%; background:#cbd5e1; animation: blink 1s infinite; }
+    .dot:nth-child(2){ animation-delay:.2s; }
+    .dot:nth-child(3){ animation-delay:.4s; }
+    @keyframes blink { 0%,100%{opacity:.2} 50%{opacity:1} }
+
     .footer-ip{
         position: fixed;
         left: 12px;
@@ -50,8 +58,6 @@ HTML_TEMPLATE = r"""<!doctype html>
         text-align: left;
         line-height: 1.2;
       }
-  /* Copyright footer (always visible) */
-
   </style>
 </head>
 <body>
@@ -92,6 +98,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         <div class="chip" data-text="1">1</div><div class="chip" data-text="2">2</div><div class="chip" data-text="3">3</div>
         <div class="chip" data-text="4">4</div><div class="chip" data-text="5">5</div><div class="chip" data-text="6">6</div>
         <div class="chip" data-text="7">7</div><div class="chip" data-text="8">8</div><div class="chip" data-text="9">9</div>
+        <div class="chip" data-text="0">0</div>
       </div>
     </div>
   </div>
@@ -119,6 +126,23 @@ HTML_TEMPLATE = r"""<!doctype html>
     chips.classList.toggle("hide", !visible);
   }
 
+  // ---- A) Wait bubble helpers ----
+  function addWaitBubble() {
+    removeWaitBubble();
+    const div = document.createElement("div");
+    div.className = "bubble bot";
+    div.dataset.wait = "1";
+    div.innerHTML = `<div class="loading">⏳ انتظر قليلًا <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
+
+  function removeWaitBubble() {
+    const w = chat.querySelector('div.bubble.bot[data-wait="1"]');
+    if (w) w.remove();
+  }
+
   async function postText(text) {
     const res = await fetch("/api/message", {
       method: "POST",
@@ -128,50 +152,70 @@ HTML_TEMPLATE = r"""<!doctype html>
     return await res.json();
   }
 
+  function setBusy(isBusy) {
+    send.disabled = isBusy;
+    back.disabled = isBusy;
+    restart.disabled = isBusy;
+    msg.disabled = isBusy;
+  }
+
   async function sendMessage(textOverride=null) {
     const text = (textOverride ?? msg.value).trim();
     if (!text) return;
     msg.value = "";
     addBubble(text, "me");
-    send.disabled = true; back.disabled = true; restart.disabled = true;
+
+    setBusy(true);
+    addWaitBubble();
+
     try {
       const data = await postText(text);
+      removeWaitBubble();
       addBubble(data.reply, "bot");
       setChipsVisible(!!data.show_chips);
     } catch (e) {
+      removeWaitBubble();
       addBubble("حدث خطأ.", "bot");
     } finally {
-      send.disabled = false; back.disabled = false; restart.disabled = false;
+      setBusy(false);
       msg.focus();
     }
   }
 
   async function backStep() {
-    send.disabled = true; back.disabled = true; restart.disabled = true;
+    setBusy(true);
+    addBubble("رجوع", "me");
+    addWaitBubble();
+
     try {
-      addBubble("رجوع", "me");
       const data = await postText(CMD_BACK);
+      removeWaitBubble();
       addBubble(data.reply, "bot");
       setChipsVisible(!!data.show_chips);
     } catch (e) {
+      removeWaitBubble();
       addBubble("حدث خطأ.", "bot");
     } finally {
-      send.disabled = false; back.disabled = false; restart.disabled = false;
+      setBusy(false);
       msg.focus();
     }
   }
 
   async function restartChat() {
-    send.disabled = true; back.disabled = true; restart.disabled = true;
+    setBusy(true);
+    addBubble("بدء من جديد", "me");
+    addWaitBubble();
+
     try {
-      addBubble("بدء من جديد", "me");
       const data = await postText(CMD_RESTART);
+      removeWaitBubble();
       addBubble(data.reply, "bot");
       setChipsVisible(!!data.show_chips);
     } catch (e) {
+      removeWaitBubble();
       addBubble("حدث خطأ.", "bot");
     } finally {
-      send.disabled = false; back.disabled = false; restart.disabled = false;
+      setBusy(false);
       msg.focus();
     }
   }
@@ -187,10 +231,12 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   setChipsVisible(true);
 </script>
+
 <div class="footer-ip">
   <div>© 2026 م/ وليد زكي</div>
   <div>جميع الحقوق محفوظة.</div>
 </div>
+
 </body>
 </html>
 """
