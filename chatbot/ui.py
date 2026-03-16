@@ -60,7 +60,7 @@ HTML_TEMPLATE = r"""<!doctype html>
           <p class="slogan">__SLOGAN__</p>
         </div>
       </div>
-      <div><a href="/admin">لوحة الأدمن</a></div>
+      __ADMIN_LINK__
     </div>
 
     <div class="card">
@@ -179,7 +179,9 @@ HTML_TEMPLATE = r"""<!doctype html>
 """
 
 
-def render_page(*, title: str, brand: str, slogan: str, initial_text: str) -> str:
+def render_page(*, title: str, brand: str, slogan: str, initial_text: str, admin_ok: bool) -> str:
+    admin_link = '<div><a href="/admin">لوحة الأدمن</a></div>' if admin_ok else "<div></div>"
+
     return (
         HTML_TEMPLATE.replace("__TITLE__", title)
         .replace("__BRAND__", brand)
@@ -187,5 +189,5 @@ def render_page(*, title: str, brand: str, slogan: str, initial_text: str) -> st
         .replace("__INITIAL__", initial_text)
         .replace("__CMD_BACK__", CMD_BACK)
         .replace("__CMD_RESTART__", CMD_RESTART)
+        .replace("__ADMIN_LINK__", admin_link)
     )
-

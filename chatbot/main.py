@@ -26,12 +26,13 @@ def chat_page(request: Request) -> str:
 
     state = ChatState.from_dict(request.session["chat_state"])
     initial = prompt_for_step(state, brand=BRAND_AR, slogan=SLOGAN_AR)
-
+    admin_ok = request.session.get("admin_ok") is True
     return render_page(
         title=BRAND_AR,
         brand=BRAND_AR,
         slogan=SLOGAN_AR,
         initial_text=initial,
+        admin_ok=admin_ok,
     )
 
 

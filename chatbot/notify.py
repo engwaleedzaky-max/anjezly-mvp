@@ -72,28 +72,38 @@ def _send_email(subject: str, body: str) -> None:
 
 
 def _send_telegram(text: str) -> None:
+    """
+    Supports:
+      - TELEGRAM_CHAT_IDS="id1,id2,-100groupid"
+      - fallback: TELEGRAM_CHAT_ID="id"
+    """
     token = _env("TELEGRAM_BOT_TOKEN", "")
-    chat_id = _env("TELEGRAM_CHAT_ID", "")
-    if not (token and chat_id):
-        # Telegram not configured
+    if not token:
         return
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        payload = resp.read().decode("utf-8", errors="ignore")
-        obj = json.loads(payload)
-        if not obj.get("ok", False):
-            raise RuntimeError(f"Telegram API error: {payload}")
+    ids_raw = _env("TELEGRAM_CHAT_IDS", "") or _env("TELEGRAM_CHAT_ID", "")
+    ids = [x.strip() for x in ids_raw.split(",") if x.strip()]
+    if not ids:
+        return
 
-    print("[TG] Sent OK")
-
+    for chat_id in ids:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = resp.read().decode("utf-8", errors="ignore")
+                obj = json.loads(payload)
+                if not obj.get("ok", False):
+                    raise RuntimeError(f"Telegram API error: {payload}")
+            print("[TG] Sent OK ->", chat_id)
+        except Exception as e:
+            print("[TG] ERROR:", chat_id, repr(e))
 
 def notify_new_request(state: ChatState) -> None:
     subject = f"{BRAND_AR} | طلب جديد"
