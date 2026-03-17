@@ -12,7 +12,7 @@ from storage import save_provider_to_excel, save_request_to_excel
 
 MIN_NAME = 2
 MIN_ADDRESS = 4
-MIN_DETAILS = 1  # ✅ نخلي التفاصيل أي نص غير فارغ لتفادي “تكرار التفاصيل”
+MIN_DETAILS = 1  # أي نص غير فارغ
 
 
 def normalize_text(s: str) -> str:
@@ -77,12 +77,6 @@ def choose_service(category_key: str, text: str) -> Optional[str]:
 
 
 def _parse_cat_service_one_line(text: str) -> Optional[tuple[str, str]]:
-    """
-    يقبل:
-      - "قسم / خدمة"
-      - "قسم - خدمة"
-      - "قسم: خدمة"
-    """
     t = normalize_text(text)
     if not t:
         return None
@@ -141,6 +135,33 @@ def prompt_for_step(state: ChatState, *, brand: str, slogan: str) -> str:
     return f"{brand}\n{slogan}\n\n{prompt_role()}"
 
 
+# ---------- FIX: small history snapshots (cookie safe) ----------
+HIST_MAX = 10
+
+
+def _snapshot(st: ChatState) -> dict:
+    # snapshot خفيف جداً لتفادي تضخم الكوكي
+    return {
+        "role": st.role,
+        "step": st.step,
+        "category_key": st.category_key,
+        "category_name": st.category_name,
+        "service_key": st.service_key,
+        "service_name": st.service_name,
+        "name": st.name,
+        "phone": st.phone,
+        # لا نخزن address/details/p_* في history لأنها تكبر
+    }
+
+
+def _state_from_snapshot(s: dict) -> ChatState:
+    st = ChatState()
+    for k, v in s.items():
+        if hasattr(st, k):
+            setattr(st, k, v)
+    return st
+
+
 def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str) -> Tuple[str, bool]:
     text = normalize_text(user_text)
 
@@ -154,14 +175,14 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
         request_session["chat_state"] = st.to_dict()
 
     def set_history(hist: list[dict]) -> None:
-        request_session["chat_history"] = hist[-40:]
+        request_session["chat_history"] = hist[-HIST_MAX:]
 
     def clear_chat() -> None:
         request_session.pop("chat_state", None)
         request_session.pop("chat_history", None)
 
     def push_history(st: ChatState) -> None:
-        history.append(st.to_dict())
+        history.append(_snapshot(st))
         set_history(history)
 
     def pop_history() -> Optional[ChatState]:
@@ -169,7 +190,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
             return None
         last = history.pop()
         set_history(history)
-        return ChatState.from_dict(last)
+        return _state_from_snapshot(last)
 
     def restart_to_role() -> Tuple[str, bool]:
         clear_chat()
@@ -199,7 +220,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
     if not state.step or not state.role:
         state.step = "role"
 
-    # role step
+    # role
     if state.step == "role":
         chosen = choose_role(text)
         if not chosen:
@@ -211,7 +232,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
         set_state(state)
         return prompt_for_step(state, brand=brand, slogan=slogan), should_show_chips(state.step)
 
-    # ---------------- customer ----------------
+    # customer
     if state.role == "customer":
         if state.step == "main_menu":
             cat_key = choose_category(text)
@@ -241,7 +262,6 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 state.category_name = cat
                 state.service_name = svc
             else:
-                # ✅ لو كتب خدمة فقط: نعتبر القسم "أخرى"
                 if len(text) < 2:
                     return "اكتب اسم خدمة صحيح أو اكتبها: قسم / خدمة", False
                 state.category_name = "أخرى"
@@ -315,6 +335,8 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 return "اكتب أي تفاصيل (حتى لو قصيرة).", False
 
             state.details = text
+
+            # ✅ حفظ/تنبيه (قد يأخذ وقت - عندك UI انتظار الآن)
             save_request_to_excel(state)
             notify_new_request(state)
 
@@ -332,7 +354,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
 
         return restart_to_role()
 
-    # ---------------- provider ----------------
+    # provider
     if state.role == "provider":
         if state.step == "p_name":
             if len(text) < MIN_NAME:
