@@ -12,6 +12,12 @@ from db import init_db
 from models import ChatState
 from ui import render_page
 
+from fastapi import Response
+
+@app.head("/")
+def healthcheck_head():
+    return Response(status_code=200)
+
 app = FastAPI(title=BRAND_AR)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
 app.include_router(admin_router)
