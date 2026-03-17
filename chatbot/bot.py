@@ -304,6 +304,15 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
             state.details = text
 
             save_request_to_excel(state)
+
+        from storage import save_request_to_neon
+        ...
+        save_request_to_excel(state)
+        try:
+            save_request_to_neon(state)
+        except Exception as e:
+            print("[NEON] request save error:", repr(e))
+
             save_request_db(state)
             notify_new_request(state)
 
@@ -365,6 +374,13 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
             state.p_home = text
 
             save_provider_to_excel(state)
+         from storage import save_provider_to_neon
+         ...
+         save_provider_to_excel(state)
+         try:
+            save_provider_to_neon(state)
+         except Exception as e:
+            print("[NEON] provider save error:", repr(e))
             save_provider_db(state)
             notify_new_provider(state)
 
