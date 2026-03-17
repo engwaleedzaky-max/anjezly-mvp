@@ -132,7 +132,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     const div = document.createElement("div");
     div.className = "bubble bot";
     div.dataset.wait = "1";
-    div.innerHTML = `<div class="loading">⏳ انتظر قليلًا <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+    div.innerHTML = `<div class="loading">⏳ من فضلك أنتظر قليلًا <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
     return div;
