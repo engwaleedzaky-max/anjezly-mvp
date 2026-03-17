@@ -1,24 +1,36 @@
-# -*- coding: utf-8 -*-
+# file: chatbot_app/config.py
+# =========================
+from __future__ import annotations
+
+import os
+import secrets
+from pathlib import Path
+
+BRAND_AR = "أنجزلي"
+SLOGAN_AR = "اطلبها، وإحنا ننجزها"
+
+REQUESTS_XLSX = Path(os.environ.get("REQUESTS_XLSX", "requests.xlsx"))
+PROVIDERS_XLSX = Path(os.environ.get("PROVIDERS_XLSX", "providers.xlsx"))
+
+ADMIN_PIN = os.environ.get("ADMIN_PIN", "4321")
+SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_urlsafe(32))
+
+CMD_BACK = "__back__"
+CMD_RESTART = "__restart__"
+
+MIN_NAME = int(os.environ.get("MIN_NAME", "2"))
+MIN_ADDRESS = int(os.environ.get("MIN_ADDRESS", "3"))
+
+# ملاحظة: التفاصيل الآن تقبل أي نص غير فارغ (بدون حد أدنى للطول)
+
+# ---- Notifications (Email / Telegram) ----
 import os
 
-# Branding
-BRAND_AR = os.getenv("BRAND_AR", "أنجزلي")
-SLOGAN_AR = os.getenv("SLOGAN_AR", "اطلبها، وإحنا ننجزها")
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
+NOTIFY_EMAIL_TO = os.getenv("NOTIFY_EMAIL_TO", "").strip()
 
-# Admin PIN
-ADMIN_PIN = os.getenv("ADMIN_PIN", "4321").strip()
-
-# Session secret (Render: set SESSION_SECRET)
-SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-session-secret-change-me")
-
-# Telegram notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-# Comma-separated chat ids (users or group ids). Example: "123, -100123456"
-TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", "").split(",") if x.strip()]
-
-# Neon Postgres (DATABASE_URL from Neon)
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
-# Excel files (local only on Render free may reset)
-REQUESTS_XLSX = os.getenv("REQUESTS_XLSX", "requests.xlsx")
-PROVIDERS_XLSX = os.getenv("PROVIDERS_XLSX", "providers.xlsx")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()

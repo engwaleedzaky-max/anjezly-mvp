@@ -1,1 +1,1 @@
-# package marker
+"""Anjezly chatbot package."""
