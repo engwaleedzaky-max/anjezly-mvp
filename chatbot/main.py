@@ -1,5 +1,4 @@
-# file: chatbot_app/main.py
-# =========================
+# file: main.py
 from __future__ import annotations
 
 from fastapi import FastAPI, Form, Request
@@ -9,12 +8,18 @@ from starlette.middleware.sessions import SessionMiddleware
 from admin import router as admin_router
 from bot import bot_reply, prompt_for_step
 from config import BRAND_AR, SESSION_SECRET, SLOGAN_AR
+from db import init_db
 from models import ChatState
 from ui import render_page
 
 app = FastAPI(title=BRAND_AR)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
 app.include_router(admin_router)
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -25,7 +30,8 @@ def chat_page(request: Request) -> str:
         request.session["chat_history"] = []
 
     state = ChatState.from_dict(request.session["chat_state"])
-    initial = prompt_for_step(state, brand=BRAND_AR, slogan=SLOGAN_AR)
+    initial = prompt_for_step(state, BRAND_AR, SLOGAN_AR)
+
     admin_ok = request.session.get("admin_ok") is True
     return render_page(
         title=BRAND_AR,
@@ -45,4 +51,3 @@ def api_message(request: Request, text: str = Form(...)) -> JSONResponse:
         slogan=SLOGAN_AR,
     )
     return JSONResponse({"reply": reply, "show_chips": show_chips})
-

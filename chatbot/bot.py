@@ -5,6 +5,7 @@ import re
 from typing import Optional, Tuple
 
 from config import CMD_BACK, CMD_RESTART
+from db import save_provider_db, save_request_db
 from menus import menu_for_ar
 from models import ChatState
 from notify import notify_new_provider, notify_new_request
@@ -12,7 +13,8 @@ from storage import save_provider_to_excel, save_request_to_excel
 
 MIN_NAME = 2
 MIN_ADDRESS = 4
-MIN_DETAILS = 1  # أي نص غير فارغ
+MIN_DETAILS = 1
+HIST_MAX = 10
 
 
 def normalize_text(s: str) -> str:
@@ -20,14 +22,13 @@ def normalize_text(s: str) -> str:
 
 
 def validate_phone(s: str) -> Optional[str]:
-    s = normalize_text(s)
-    digits = "".join(ch for ch in s if ch.isdigit())
+    digits = "".join(ch for ch in normalize_text(s) if ch.isdigit())
     return digits if len(digits) >= 10 else None
 
 
 def wants_restart(text: str) -> bool:
     t = normalize_text(text)
-    return t in {"ابدأ من جديد", "بدء من جديد", "بدء جديد", "بداية جديدة", "#", "restart", "start over"}
+    return t in {"ابدأ من جديد", "بدء من جديد", "بدء جديد", "#", "restart", "start over"}
 
 
 def should_show_chips(step: str) -> bool:
@@ -78,19 +79,16 @@ def choose_service(category_key: str, text: str) -> Optional[str]:
 
 def _parse_cat_service_one_line(text: str) -> Optional[tuple[str, str]]:
     t = normalize_text(text)
-    if not t:
-        return None
     parts = re.split(r"\s*[/\-:]\s*", t, maxsplit=1)
     if len(parts) != 2:
         return None
-    cat = normalize_text(parts[0])
-    svc = normalize_text(parts[1])
+    cat, svc = normalize_text(parts[0]), normalize_text(parts[1])
     if len(cat) < 2 or len(svc) < 2:
         return None
     return cat, svc
 
 
-def prompt_for_step(state: ChatState, *, brand: str, slogan: str) -> str:
+def prompt_for_step(state: ChatState, brand: str, slogan: str) -> str:
     if state.step == "role" or not state.role:
         return f"{brand}\n{slogan}\n\n{prompt_role()}"
 
@@ -99,13 +97,10 @@ def prompt_for_step(state: ChatState, *, brand: str, slogan: str) -> str:
             return prompt_main_menu()
         if state.step == "sub_menu":
             return prompt_sub_menu(state.category_key or "")
-
         if state.step == "custom_cat_service":
             return "اكتب: اسم القسم / اسم الخدمة (مثال: خدمات قانونية / استشارة عقد)\n(أو اكتب اسم الخدمة فقط)"
-
         if state.step == "custom_service":
             return "اكتب اسم الخدمة المطلوبة (أخرى):"
-
         if state.step == "name":
             return "اكتب اسمك:"
         if state.step == "phone":
@@ -113,16 +108,11 @@ def prompt_for_step(state: ChatState, *, brand: str, slogan: str) -> str:
         if state.step == "address":
             return "اكتب العنوان / المنطقة:"
         if state.step == "details":
-            svc = state.service_name or "الخدمة"
-            return f"اكتب تفاصيل الطلب: ({svc})"
+            return f"اكتب تفاصيل الطلب: ({state.service_name or 'الخدمة'})"
 
     if state.role == "provider":
         if state.step == "p_name":
-            return (
-                "احجز موقعك مع فريق عمل أنجزلي.\n"
-                "سجل اسمك ورقمك ومهنتك.\n\n"
-                "اكتب اسمك:"
-            )
+            return "احجز موقعك مع فريق عمل انجزلي\nسجل اسمك ورقمك ومهنتك\n\nاكتب اسمك:"
         if state.step == "p_phone":
             return "اكتب رقم الموبايل (10 أرقام على الأقل):"
         if state.step == "p_profession":
@@ -135,12 +125,7 @@ def prompt_for_step(state: ChatState, *, brand: str, slogan: str) -> str:
     return f"{brand}\n{slogan}\n\n{prompt_role()}"
 
 
-# ---------- FIX: small history snapshots (cookie safe) ----------
-HIST_MAX = 10
-
-
 def _snapshot(st: ChatState) -> dict:
-    # snapshot خفيف جداً لتفادي تضخم الكوكي
     return {
         "role": st.role,
         "step": st.step,
@@ -150,7 +135,6 @@ def _snapshot(st: ChatState) -> dict:
         "service_name": st.service_name,
         "name": st.name,
         "phone": st.phone,
-        # لا نخزن address/details/p_* في history لأنها تكبر
     }
 
 
@@ -197,20 +181,14 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
         st = ChatState(role=None, step="role")
         set_state(st)
         set_history([])
-        return prompt_for_step(st, brand=brand, slogan=slogan), True
+        return prompt_for_step(st, brand, slogan), True
 
     def back_one_step() -> Tuple[str, bool]:
         prev = pop_history()
         if not prev:
-            return (
-                "لا توجد خطوة سابقة.\n\n" + prompt_for_step(state, brand=brand, slogan=slogan),
-                should_show_chips(state.step),
-            )
+            return ("لا توجد خطوة سابقة.\n\n" + prompt_for_step(state, brand, slogan), should_show_chips(state.step))
         set_state(prev)
-        return (
-            "↩️ رجوع.\n\n" + prompt_for_step(prev, brand=brand, slogan=slogan),
-            should_show_chips(prev.step),
-        )
+        return ("↩️ رجوع.\n\n" + prompt_for_step(prev, brand, slogan), should_show_chips(prev.step))
 
     if text == CMD_BACK:
         return back_one_step()
@@ -220,124 +198,113 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
     if not state.step or not state.role:
         state.step = "role"
 
-    # role
     if state.step == "role":
         chosen = choose_role(text)
         if not chosen:
-            return "اختيار غير صحيح.\n\n" + prompt_for_step(state, brand=brand, slogan=slogan), True
-
+            return ("اختيار غير صحيح.\n\n" + prompt_for_step(state, brand, slogan), True)
         push_history(state)
         state.role = chosen
         state.step = "main_menu" if chosen == "customer" else "p_name"
         set_state(state)
-        return prompt_for_step(state, brand=brand, slogan=slogan), should_show_chips(state.step)
+        return (prompt_for_step(state, brand, slogan), should_show_chips(state.step))
 
-    # customer
     if state.role == "customer":
         if state.step == "main_menu":
             cat_key = choose_category(text)
             if not cat_key:
-                return "اختيار غير صحيح.\n\n" + prompt_main_menu(), True
-
+                return ("اختيار غير صحيح.\n\n" + prompt_main_menu(), True)
             push_history(state)
             main, _ = menu_for_ar()
             state.category_key = cat_key
             state.category_name = main.get(cat_key, "أخرى")
-
             if cat_key == "0":
                 state.step = "custom_cat_service"
                 set_state(state)
-                return prompt_for_step(state, brand=brand, slogan=slogan), False
-
+                return (prompt_for_step(state, brand, slogan), False)
             state.step = "sub_menu"
             set_state(state)
-            return prompt_sub_menu(cat_key), True
+            return (prompt_sub_menu(cat_key), True)
 
         if state.step == "custom_cat_service":
             parsed = _parse_cat_service_one_line(text)
             push_history(state)
-
             if parsed:
                 cat, svc = parsed
                 state.category_name = cat
                 state.service_name = svc
             else:
                 if len(text) < 2:
-                    return "اكتب اسم خدمة صحيح أو اكتبها: قسم / خدمة", False
+                    return ("اكتب اسم خدمة صحيح أو اكتبها: قسم / خدمة", False)
                 state.category_name = "أخرى"
                 state.service_name = text
-
             state.category_key = "0"
             state.service_key = "0"
             state.step = "name"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "sub_menu":
             svc_key = choose_service(state.category_key or "", text)
             if not svc_key:
-                return "اختيار غير صحيح.\n\n" + prompt_sub_menu(state.category_key or ""), True
-
+                return ("اختيار غير صحيح.\n\n" + prompt_sub_menu(state.category_key or ""), True)
             push_history(state)
             _, sub = menu_for_ar()
             state.service_key = svc_key
             state.service_name = sub.get(state.category_key or "", {}).get(svc_key, "أخرى")
-
             if svc_key == "0":
                 state.step = "custom_service"
                 set_state(state)
-                return prompt_for_step(state, brand=brand, slogan=slogan), False
-
+                return (prompt_for_step(state, brand, slogan), False)
             state.step = "name"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "custom_service":
             if len(text) < 2:
-                return "اكتب اسم خدمة صحيح.", False
+                return ("اكتب اسم خدمة صحيح.", False)
             push_history(state)
             state.service_key = "0"
             state.service_name = text
             state.step = "name"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "name":
             if len(text) < MIN_NAME:
-                return "الاسم قصير جداً.", False
+                return ("الاسم قصير جداً.", False)
             push_history(state)
             state.name = text
             state.step = "phone"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "phone":
             phone = validate_phone(text)
             if not phone:
-                return "رقم الهاتف غير صحيح (لازم 10 أرقام على الأقل).", False
+                return ("رقم الهاتف غير صحيح (لازم 10 أرقام على الأقل).", False)
             push_history(state)
             state.phone = phone
             state.step = "address"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "address":
             if len(text) < MIN_ADDRESS:
-                return "العنوان قصير جداً.", False
+                return ("العنوان قصير جداً.", False)
             push_history(state)
             state.address = text
             state.step = "details"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "details":
             if not text.strip() or len(text.strip()) < MIN_DETAILS:
-                return "اكتب أي تفاصيل (حتى لو قصيرة).", False
+                return ("اكتب أي تفاصيل (حتى لو قصيرة).", False)
 
             state.details = text
 
-            # ✅ حفظ/تنبيه (قد يأخذ وقت - عندك UI انتظار الآن)
             save_request_to_excel(state)
+            save_request_db(state)
             notify_new_request(state)
 
             confirmation = (
@@ -350,55 +317,55 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 f"التفاصيل: {state.details}\n\n"
             )
             msg, _ = restart_to_role()
-            return confirmation + msg, True
+            return (confirmation + msg, True)
 
         return restart_to_role()
 
-    # provider
     if state.role == "provider":
         if state.step == "p_name":
             if len(text) < MIN_NAME:
-                return "الاسم قصير جداً.", False
+                return ("الاسم قصير جداً.", False)
             push_history(state)
             state.p_name = text
             state.step = "p_phone"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "p_phone":
             phone = validate_phone(text)
             if not phone:
-                return "رقم الموبايل غير صحيح (لازم 10 أرقام على الأقل).", False
+                return ("رقم الموبايل غير صحيح (لازم 10 أرقام على الأقل).", False)
             push_history(state)
             state.p_phone = phone
             state.step = "p_profession"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "p_profession":
             if len(text) < 2:
-                return "اكتب مهنة/تخصص صحيح.", False
+                return ("اكتب مهنة/تخصص صحيح.", False)
             push_history(state)
             state.p_profession = text
             state.step = "p_contrib"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "p_contrib":
             if len(text) < 2:
-                return "اكتب إجابة واضحة.", False
+                return ("اكتب إجابة واضحة.", False)
             push_history(state)
             state.p_contrib = text
             state.step = "p_home"
             set_state(state)
-            return prompt_for_step(state, brand=brand, slogan=slogan), False
+            return (prompt_for_step(state, brand, slogan), False)
 
         if state.step == "p_home":
             if len(text) < 2:
-                return "اكتب إجابة واضحة.", False
+                return ("اكتب إجابة واضحة.", False)
             state.p_home = text
 
             save_provider_to_excel(state)
+            save_provider_db(state)
             notify_new_provider(state)
 
             confirmation = (
@@ -410,7 +377,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 f"تصنع ايه من البيت: {state.p_home}\n\n"
             )
             msg, _ = restart_to_role()
-            return confirmation + msg, True
+            return (confirmation + msg, True)
 
         return restart_to_role()
 

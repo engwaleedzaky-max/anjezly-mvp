@@ -3,3 +3,4 @@ uvicorn[standard]
 itsdangerous
 openpyxl
 python-multipart
+psycopg[binary]==3.2.9
