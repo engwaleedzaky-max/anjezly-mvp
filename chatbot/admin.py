@@ -1,133 +1,133 @@
-# file: admin.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+import os
 
-from typing import Optional
-
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-
-from config import ADMIN_PIN, BRAND_AR, PROVIDERS_XLSX, REQUESTS_XLSX
-from db import db_enabled, last_requests_db
+from config import ADMIN_PIN, REQUESTS_XLSX, PROVIDERS_XLSX
+from storage import (
+    neon_enabled,
+    init_neon,
+    list_last_requests_from_neon,
+    list_last_providers_from_neon,
+)
 
 router = APIRouter()
 
-
-def _esc(s: object) -> str:
-    t = "" if s is None else str(s)
-    return (
-        t.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
-
-
-def _trunc(s: object, n: int = 80) -> str:
-    t = "" if s is None else str(s)
-    return (t[: n - 1] + "…") if len(t) > n else t
-
+def _is_admin(request: Request) -> bool:
+    return request.session.get("is_admin") is True
 
 @router.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request, pin: Optional[str] = None) -> str:
-    ok = request.session.get("admin_ok") is True
-
-    if pin and pin.strip() == ADMIN_PIN:
-        request.session["admin_ok"] = True
-        ok = True
-
-    if not ok:
-        return f"""<!doctype html>
-<html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{BRAND_AR} | لوحة الأدمن</title></head>
-<body style="font-family:system-ui,Arial; padding:24px;">
-<h2>لوحة الأدمن</h2>
-<p>ادخل الرقم السري (PIN)</p>
-<form method="get" action="/admin">
-  <input name="pin" placeholder="PIN" style="padding:10px; width:240px;"/>
-  <button type="submit" style="padding:10px;">دخول</button>
-</form>
-</body></html>"""
-
-    req_exists = REQUESTS_XLSX.exists()
-    prov_exists = PROVIDERS_XLSX.exists()
-
-    rows = last_requests_db(50) if db_enabled() else []
-    db_status = "✅ متصل" if db_enabled() else "❌ غير متصل (DATABASE_URL غير مضبوط)"
-
-    if not rows:
-        table_html = "<p>لا توجد طلبات على Neon بعد (أو Neon غير متصل).</p>"
-    else:
-        headers = ["التاريخ", "القسم", "الخدمة", "الاسم", "الهاتف", "العنوان", "التفاصيل"]
-        th = "".join(
-            f"<th style='padding:10px;border-bottom:1px solid #eee;background:#f8fafc;text-align:right;'>{h}</th>"
-            for h in headers
-        )
-        tr_list = []
-        for r in rows:
-            tr_list.append(
-                "<tr>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(r['created_at'])}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(r['category_name'])}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(r['service_name'])}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(r['name'])}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(r['phone'])}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(_trunc(r['address'], 60))}</td>"
-                + f"<td style='padding:10px;border-bottom:1px solid #eee;vertical-align:top;'>{_esc(_trunc(r['details'], 70))}</td>"
-                + "</tr>"
+def admin_dashboard(request: Request, pin: str | None = None):
+    # login via /admin?pin=4321 then session stays
+    if not _is_admin(request):
+        if pin and pin.strip() == ADMIN_PIN:
+            request.session["is_admin"] = True
+        else:
+            return HTMLResponse(
+                "<h2>لوحة الأدمن</h2><p>ادخل باللينك: <code>/admin?pin=PIN</code></p>",
+                status_code=401,
             )
 
-        table_html = f"""
-        <div style="overflow:auto;border:1px solid #eee;border-radius:12px;">
-          <table style="border-collapse:collapse;width:100%;min-width:1000px;">
-            <thead><tr>{th}</tr></thead>
-            <tbody>{''.join(tr_list)}</tbody>
-          </table>
-        </div>
-        <p style="color:#6b7280;font-size:12px;">* عرض آخر 50 طلب من Neon (الأحدث أولاً). العنوان/التفاصيل قد تُعرض مختصرة.</p>
-        """
+    neon_ok = init_neon()
+    reqs = list_last_requests_from_neon(50)
+    provs = list_last_providers_from_neon(50)
 
-    return f"""<!doctype html>
+    def esc(s: str) -> str:
+        return (
+            (s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    rows_req = "\n".join(
+        f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['category'])}</td><td>{esc(r['service'])}</td>"
+        f"<td>{esc(r['name'])}</td><td>{esc(r['phone'])}</td><td>{esc(r['address'])}</td><td>{esc(r['details'])}</td></tr>"
+        for r in reqs
+    ) or "<tr><td colspan='7'>لا توجد بيانات بعد.</td></tr>"
+
+    rows_prov = "\n".join(
+        f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['name'])}</td><td>{esc(r['phone'])}</td>"
+        f"<td>{esc(r['profession'])}</td><td>{esc(r['contrib'])}</td><td>{esc(r['home'])}</td></tr>"
+        for r in provs
+    ) or "<tr><td colspan='6'>لا توجد بيانات بعد.</td></tr>"
+
+    req_exists = os.path.exists(REQUESTS_XLSX)
+    prov_exists = os.path.exists(PROVIDERS_XLSX)
+
+    html = f"""<!doctype html>
 <html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{BRAND_AR} | لوحة الأدمن</title></head>
-<body style="font-family:system-ui,Arial; padding:24px;">
-<h2>لوحة الأدمن</h2>
-<p><a href="/">رجوع للشات</a></p>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لوحة الأدمن</title>
+<style>
+  body{{font-family:system-ui,Arial;margin:24px}}
+  table{{border-collapse:collapse;width:100%}}
+  th,td{{border:1px solid #e5e7eb;padding:8px;text-align:right;vertical-align:top}}
+  th{{background:#f3f4f6}}
+  .muted{{color:#6b7280}}
+  .ok{{color:#16a34a;font-weight:800}}
+  .bad{{color:#b00020;font-weight:800}}
+  .card{{border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:12px 0}}
+  a{{color:#2563eb}}
+</style>
+</head><body>
+<h1>لوحة الأدمن</h1>
 
-<h3>حالة Neon</h3>
-<p>{db_status}</p>
+<div class="card">
+  <b>حالة Neon:</b>
+  {"<span class='ok'>✅ متصل</span>" if neon_ok else "<span class='bad'>❌ غير متصل</span>"}
+  <div class="muted">* يتم عرض آخر 50 طلب و آخر 50 تسجيل مقدم خدمة من Neon.</div>
+</div>
 
-<hr style="margin:18px 0;"/>
+<div class="card">
+  <h2>آخر 50 طلب (Neon)</h2>
+  <table>
+    <thead><tr>
+      <th>التاريخ</th><th>القسم</th><th>الخدمة</th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>التفاصيل</th>
+    </tr></thead>
+    <tbody>{rows_req}</tbody>
+  </table>
+</div>
 
-<h3>آخر 50 طلب (Neon)</h3>
-{table_html}
+<div class="card">
+  <h2>آخر 50 تسجيل مقدم خدمة (Neon)</h2>
+  <table>
+    <thead><tr>
+      <th>التاريخ</th><th>الاسم</th><th>الهاتف</th><th>المهنة</th><th>تقدر تضيف</th><th>من البيت</th>
+    </tr></thead>
+    <tbody>{rows_prov}</tbody>
+  </table>
+</div>
 
-<hr style="margin:18px 0;"/>
-
-<h3>ملفات Excel (قد تُحذف على Render المجاني)</h3>
-<p>طلبات طالبي الخدمة: {"✅ موجود" if req_exists else "❌ لا يوجد بعد"}</p>
-{"<a href='/admin/download/requests'>⬇️ تحميل requests.xlsx</a>" if req_exists else ""}
-<p style="margin-top:10px;">بيانات مقدمي الخدمة: {"✅ موجود" if prov_exists else "❌ لا يوجد بعد"}</p>
-{"<a href='/admin/download/providers'>⬇️ تحميل providers.xlsx</a>" if prov_exists else ""}
+<div class="card">
+  <h2>ملفات Excel (قد تُحذف على Render المجاني)</h2>
+  <p>طلبات طالبي الخدمة: {"✅ موجود" if req_exists else "❌ غير موجود"}<br/>
+     {f"<a href='/admin/download/requests'>تحميل requests.xlsx</a>" if req_exists else ""}</p>
+  <p>بيانات مقدمي الخدمة: {"✅ موجود" if prov_exists else "❌ غير موجود"}<br/>
+     {f"<a href='/admin/download/providers'>تحميل providers.xlsx</a>" if prov_exists else ""}</p>
+</div>
 
 </body></html>"""
+    return HTMLResponse(html)
 
+@router.get("/admin/logout")
+def admin_logout(request: Request):
+    request.session.pop("is_admin", None)
+    return RedirectResponse("/", status_code=303)
 
-@router.get("/admin/download/{which}")
-def admin_download(request: Request, which: str) -> Response:
-    if request.session.get("admin_ok") is not True:
-        return RedirectResponse("/admin", status_code=303)
+@router.get("/admin/download/requests")
+def dl_requests(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not os.path.exists(REQUESTS_XLSX):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(REQUESTS_XLSX, filename="requests.xlsx")
 
-    if which == "requests":
-        if not REQUESTS_XLSX.exists():
-            return RedirectResponse("/admin", status_code=303)
-        return FileResponse(str(REQUESTS_XLSX), filename="requests.xlsx")
-
-    if which == "providers":
-        if not PROVIDERS_XLSX.exists():
-            return RedirectResponse("/admin", status_code=303)
-        return FileResponse(str(PROVIDERS_XLSX), filename="providers.xlsx")
-
-    return RedirectResponse("/admin", status_code=303)
+@router.get("/admin/download/providers")
+def dl_providers(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not os.path.exists(PROVIDERS_XLSX):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(PROVIDERS_XLSX, filename="providers.xlsx")

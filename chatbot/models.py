@@ -1,17 +1,13 @@
-# file: models.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from dataclasses import dataclass, asdict
+from typing import Optional, Dict, Any, Literal
 
 Role = Literal["customer", "provider"]
-
 Step = Literal[
     "role",
     "main_menu",
     "sub_menu",
-    "custom_cat_service",  # ✅ أخرى كقسم: سؤال واحد (قسم/خدمة)
-    "custom_service",      # ✅ أخرى كخدمة: سؤال واحد (اسم الخدمة)
     "name",
     "phone",
     "address",
@@ -21,13 +17,13 @@ Step = Literal[
     "p_profession",
     "p_contrib",
     "p_home",
+    "done",
 ]
-
 
 @dataclass
 class ChatState:
     role: Optional[Role] = None
-    step: Step = "role"
+    step: str = "role"
 
     # customer
     category_key: str = ""
@@ -46,36 +42,13 @@ class ChatState:
     p_contrib: str = ""
     p_home: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
-        return self.__dict__.copy()
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "ChatState":
-        st = cls()
-        for k in st.__dict__.keys():
-            if k in raw:
-                setattr(st, k, raw[k])
-
-        if st.role not in (None, "customer", "provider"):
-            st.role = None
-
-        valid_steps = {
-            "role",
-            "main_menu",
-            "sub_menu",
-            "custom_cat_service",
-            "custom_service",
-            "name",
-            "phone",
-            "address",
-            "details",
-            "p_name",
-            "p_phone",
-            "p_profession",
-            "p_contrib",
-            "p_home",
-        }
-        if st.step not in valid_steps:
-            st.step = "role"
-
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "ChatState":
+        st = ChatState()
+        for k,v in d.items():
+            if hasattr(st, k):
+                setattr(st, k, v)
         return st

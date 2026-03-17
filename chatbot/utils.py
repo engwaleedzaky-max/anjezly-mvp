@@ -1,78 +1,30 @@
-# file: chatbot_app/models.py
-# =========================
-from __future__ import annotations
+# -*- coding: utf-8 -*-
+import re
 
-from dataclasses import dataclass
-from typing import Any, Literal, Optional
+CMD_BACK = "رجوع"
+CMD_RESTART = "بدء من جديد"
 
-Role = Literal["customer", "provider"]
+MIN_NAME = 2
+MIN_ADDRESS = 2
+MIN_DETAILS = 2
 
-Step = Literal[
-    "role",
-    "main_menu",
-    "sub_menu",
-    "name",
-    "phone",
-    "address",
-    "details",
-    "p_name",
-    "p_phone",
-    "p_profession",
-    "p_contrib",
-    "p_home",
-]
+def normalize_text(s: str) -> str:
+    return (s or "").strip()
 
+def is_number_choice(s: str) -> bool:
+    return bool(re.fullmatch(r"\d+", s.strip()))
 
-@dataclass
-class ChatState:
-    role: Optional[Role] = None
-    step: Step = "role"
+def validate_phone(s: str) -> str | None:
+    s = re.sub(r"\s+", "", (s or "").strip())
+    digits = re.sub(r"\D+", "", s)
+    if len(digits) < 10:
+        return None
+    return digits
 
-    # customer
-    category_key: str = ""
-    category_name: str = ""
-    service_key: str = ""
-    service_name: str = ""
-    name: str = ""
-    phone: str = ""
-    address: str = ""
-    details: str = ""
+def wants_restart(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return t in {"restart", "start over", "reset", "#", "ابدأ من جديد", "بدء من جديد", "start"}
 
-    # provider
-    p_name: str = ""
-    p_phone: str = ""
-    p_profession: str = ""
-    p_contrib: str = ""
-    p_home: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.__dict__.copy()
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "ChatState":
-        st = cls()
-        for k in st.__dict__.keys():
-            if k in raw:
-                setattr(st, k, raw[k])
-
-        if st.role not in (None, "customer", "provider"):
-            st.role = None
-
-        valid_steps = {
-            "role",
-            "main_menu",
-            "sub_menu",
-            "name",
-            "phone",
-            "address",
-            "details",
-            "p_name",
-            "p_phone",
-            "p_profession",
-            "p_contrib",
-            "p_home",
-        }
-        if st.step not in valid_steps:
-            st.step = "role"
-
-        return st
+def safe_trunc(s: str, n: int = 300) -> str:
+    s = (s or "").strip()
+    return s if len(s) <= n else s[: n-1] + "…"

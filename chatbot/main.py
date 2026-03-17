@@ -1,58 +1,42 @@
-# file: main.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-
-from fastapi import FastAPI, Form, Request, Response
+import secrets
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from admin import router as admin_router
-from bot import bot_reply, prompt_for_step
-from config import BRAND_AR, SESSION_SECRET, SLOGAN_AR
-from db import init_db
+from config import BRAND_AR, SLOGAN_AR, SESSION_SECRET
 from models import ChatState
-from ui import render_page
+from bot import bot_reply, prompt_for_step, should_show_chips
+from admin import router as admin_router
+from storage import init_neon
 
-app = FastAPI(title=BRAND_AR)  # ✅ لازم قبل أي @app.*
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
+app = FastAPI(title=BRAND_AR)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET if SESSION_SECRET else secrets.token_urlsafe(32),
+    same_site="lax",
+)
+
 app.include_router(admin_router)
-
-
-@app.head("/")
-def healthcheck_head() -> Response:
-    return Response(status_code=200)
-
 
 @app.on_event("startup")
 def _startup() -> None:
-    init_db()
-
+    # Best effort: create Neon tables if DATABASE_URL provided
+    init_neon()
 
 @app.get("/", response_class=HTMLResponse)
-def chat_page(request: Request) -> str:
-    if not isinstance(request.session.get("chat_state"), dict):
-        st = ChatState(role=None, step="role")
-        request.session["chat_state"] = st.to_dict()
-        request.session["chat_history"] = []
-
-    state = ChatState.from_dict(request.session["chat_state"])
-    initial = prompt_for_step(state, BRAND_AR, SLOGAN_AR)
-
-    admin_ok = request.session.get("admin_ok") is True
-    return render_page(
-        title=BRAND_AR,
-        brand=BRAND_AR,
-        slogan=SLOGAN_AR,
-        initial_text=initial,
-        admin_ok=admin_ok,
-    )
-
+def chat_page(request: Request):
+    raw_state = request.session.get("chat_state")
+    state = ChatState.from_dict(raw_state) if isinstance(raw_state, dict) else ChatState(role=None, step="role")
+    initial = prompt_for_step(state, brand=BRAND_AR, slogan=SLOGAN_AR)
+    from ui import render_chat_page
+    return HTMLResponse(render_chat_page(initial))
 
 @app.post("/api/message")
-def api_message(request: Request, text: str = Form(...)) -> JSONResponse:
-    reply, show_chips = bot_reply(
-        request.session,
-        text,
-        brand=BRAND_AR,
-        slogan=SLOGAN_AR,
-    )
-    return JSONResponse({"reply": reply, "show_chips": show_chips})
+async def api_message(request: Request):
+    data = await request.json()
+    text = (data.get("text") or "").strip()
+    reply, show_chips = bot_reply(request.session, text, brand=BRAND_AR, slogan=SLOGAN_AR)
+    return JSONResponse({"reply": reply, "show_chips": bool(show_chips)})
