@@ -1,15 +1,14 @@
-# file: storage.py
+# file: chatbot_app/storage.py
+# =========================
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Sequence
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from config import PROVIDERS_XLSX, REQUESTS_XLSX
-from db import db_enabled, fetch_last_providers, fetch_last_requests, insert_provider, insert_request
 from models import ChatState
 
 
@@ -29,9 +28,10 @@ def save_request_to_excel(state: ChatState) -> None:
         ws = wb.active
         ws.title = "requests"
 
-    headers = ["created_at", "القسم", "الخدمة", "الاسم", "الهاتف", "العنوان", "التفاصيل", "source"]
-    _ensure_header(ws, headers)
-
+    _ensure_header(
+        ws,
+        ["created_at", "القسم", "الخدمة", "الاسم", "الهاتف", "العنوان", "التفاصيل", "source"],
+    )
     ws.append(
         [
             created_at,
@@ -46,23 +46,6 @@ def save_request_to_excel(state: ChatState) -> None:
     )
     wb.save(REQUESTS_XLSX)
 
-    # Neon insert (لا نكسر الطلب لو حصل خطأ)
-    if db_enabled():
-        try:
-            insert_request(
-                {
-                    "category_name": state.category_name,
-                    "service_name": state.service_name,
-                    "customer_name": state.name,
-                    "customer_phone": state.phone,
-                    "address": state.address,
-                    "details": state.details,
-                    "source": "web_chat",
-                }
-            )
-        except Exception as e:
-            print("[NEON] insert_request error:", repr(e))
-
 
 def save_provider_to_excel(state: ChatState) -> None:
     created_at = datetime.utcnow().isoformat(timespec="seconds")
@@ -75,9 +58,10 @@ def save_provider_to_excel(state: ChatState) -> None:
         ws = wb.active
         ws.title = "providers"
 
-    headers = ["created_at", "الاسم", "الهاتف", "المهنة", "ماذا تضيف للفريق", "تصنع ايه من البيت", "source"]
-    _ensure_header(ws, headers)
-
+    _ensure_header(
+        ws,
+        ["created_at", "الاسم", "الهاتف", "المهنة", "ماذا تضيف للفريق", "تصنع ايه من البيت", "source"],
+    )
     ws.append(
         [
             created_at,
@@ -90,65 +74,3 @@ def save_provider_to_excel(state: ChatState) -> None:
         ]
     )
     wb.save(PROVIDERS_XLSX)
-
-    if db_enabled():
-        try:
-            insert_provider(
-                {
-                    "provider_name": state.p_name,
-                    "provider_phone": state.p_phone,
-                    "profession": state.p_profession,
-                    "contrib": state.p_contrib,
-                    "home_make": state.p_home,
-                    "source": "web_chat",
-                }
-            )
-        except Exception as e:
-            print("[NEON] insert_provider error:", repr(e))
-
-
-def export_requests_xlsx(path: Path, limit: int = 50) -> Path:
-    rows = fetch_last_requests(limit) if db_enabled() else []
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "requests"
-    ws.append(["created_at", "القسم", "الخدمة", "الاسم", "الهاتف", "العنوان", "التفاصيل", "source"])
-
-    for r in rows:
-        ws.append(
-            [
-                str(r["created_at"]),
-                str(r["category_name"]),
-                str(r["service_name"]),
-                str(r["customer_name"]),
-                str(r["customer_phone"]),
-                str(r["address"]),
-                str(r["details"]),
-                str(r.get("source", "web_chat")),
-            ]
-        )
-    wb.save(path)
-    return path
-
-
-def export_providers_xlsx(path: Path, limit: int = 50) -> Path:
-    rows = fetch_last_providers(limit) if db_enabled() else []
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "providers"
-    ws.append(["created_at", "الاسم", "الهاتف", "المهنة", "ماذا تضيف للفريق", "تصنع ايه من البيت", "source"])
-
-    for r in rows:
-        ws.append(
-            [
-                str(r["created_at"]),
-                str(r["provider_name"]),
-                str(r["provider_phone"]),
-                str(r["profession"]),
-                str(r["contrib"]),
-                str(r["home_make"]),
-                str(r.get("source", "web_chat")),
-            ]
-        )
-    wb.save(path)
-    return path
