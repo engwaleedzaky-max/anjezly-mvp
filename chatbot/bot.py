@@ -366,9 +366,9 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
             return confirmation + msg, True
 
         return restart_to_role()
-
-    # provider
+            # provider
     if state.role == "provider":
+
         if state.step == "p_name":
             if len(text) < MIN_NAME:
                 return "الاسم قصير جداً.", False
@@ -409,23 +409,20 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
         if state.step == "p_home":
             if len(text) < 2:
                 return "اكتب إجابة واضحة.", False
+
             state.p_home = text
 
-            # حفظ في Neon
-            insert_request({
-                 "category_name": state.category_name,
-                 "service_name": state.service_name,
-                 "customer_name": state.name,
-                 "customer_phone": state.phone,
-                 "address": state.address,
-                 "details": state.details,
-                 "source": "web_chat"
+            insert_provider({
+                "provider_name": state.p_name,
+                "provider_phone": state.p_phone,
+                "profession": state.p_profession,
+                "contrib": state.p_contrib,
+                "home_make": state.p_home,
+                "source": "web_chat"
             })
 
-           # حفظ في Excel (اختياري احتياطي)
-            save_request_to_excel(state)
-
-            notify_new_request(state)
+            save_provider_to_excel(state)
+            notify_new_provider(state)
 
             confirmation = (
                 "✅ تم تسجيل بياناتك كمقدم خدمة.\n\n"
@@ -435,6 +432,7 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 f"إضافة للفريق: {state.p_contrib}\n"
                 f"تصنع ايه من البيت: {state.p_home}\n\n"
             )
+
             msg, _ = restart_to_role()
             return confirmation + msg, True
 
