@@ -132,7 +132,7 @@ def fetch_last_requests(limit: int = 50) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 
-def fetch_last_providers(limit: int = 50) -> List[Dict[str, Any]]:
+def fetch_last_providers(limit: int = 50):
     if not db_enabled():
         return []
 
