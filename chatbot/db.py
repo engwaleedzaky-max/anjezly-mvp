@@ -141,11 +141,12 @@ def fetch_last_providers(limit: int = 50):
             """
             SELECT id,
                    created_at,
-                   name,
-                   phone,
+                   provider_name,
+                   provider_phone,
                    profession,
                    contrib,
-                   home
+                   home_make,
+                   source
             FROM providers
             ORDER BY created_at DESC, id DESC
             LIMIT %s
