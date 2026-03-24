@@ -132,17 +132,22 @@ def fetch_last_requests(limit: int = 50) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 
-def fetch_last_providers(limit: int = 50) -> List[Dict[str, Any]]:
-    if not db_enabled():
+def fetch_last_providers(limit=50):
+    conn = get_connection()
+    if not conn:
         return []
-    with conn_ctx() as conn, conn.cursor() as cur:
+
+    with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, created_at, provider_name, provider_phone, profession, contrib, home_make, source
+            SELECT id, created_at, name, phone, category, service
             FROM providers
-            ORDER BY created_at DESC, id DESC
+            ORDER BY created_at DESC
             LIMIT %s
             """,
             (limit,),
         )
-        return list(cur.fetchall())
+        rows = cur.fetchall()
+
+    conn.close()
+    return rows
