@@ -1,12 +1,12 @@
-# file: admin.py
 from __future__ import annotations
 
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from config import ADMIN_PIN, BRAND_AR, PROVIDERS_XLSX, REQUESTS_XLSX
+from db import fetch_last_requests, fetch_last_providers
+from config import ADMIN_PIN, BRAND_AR
 
 router = APIRouter()
 
@@ -21,9 +21,12 @@ def admin_page(request: Request, pin: Optional[str] = None) -> str:
 
     if not ok:
         return f"""<!doctype html>
-<html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{BRAND_AR} | لوحة الأدمن</title></head>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{BRAND_AR} | لوحة الأدمن</title>
+</head>
 <body style="font-family:system-ui,Arial; padding:24px;">
 <h2>لوحة الأدمن</h2>
 <p>ادخل الرقم السري (PIN)</p>
@@ -31,45 +34,80 @@ def admin_page(request: Request, pin: Optional[str] = None) -> str:
   <input name="pin" placeholder="PIN" style="padding:10px; width:240px;"/>
   <button type="submit" style="padding:10px;">دخول</button>
 </form>
-</body></html>"""
+</body>
+</html>"""
 
-    req_exists = REQUESTS_XLSX.exists()
-    prov_exists = PROVIDERS_XLSX.exists()
+    # 🔥 جلب البيانات من Neon
+    requests_data = fetch_last_requests(50)
+    providers_data = fetch_last_providers(50)
+
+    # ----------- جدول الطلبات -----------
+    req_rows = ""
+    for r in requests_data:
+        req_rows += f"""
+        <tr>
+            <td>{r['created_at']}</td>
+            <td>{r['category_name']}</td>
+            <td>{r['service_name']}</td>
+            <td>{r['customer_name']}</td>
+            <td>{r['customer_phone']}</td>
+        </tr>
+        """
+
+    # ----------- جدول مقدمي الخدمة -----------
+    prov_rows = ""
+    for p in providers_data:
+        prov_rows += f"""
+        <tr>
+            <td>{p['created_at']}</td>
+            <td>{p['provider_name']}</td>
+            <td>{p['provider_phone']}</td>
+            <td>{p['profession']}</td>
+        </tr>
+        """
 
     return f"""<!doctype html>
-<html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{BRAND_AR} | لوحة الأدمن</title></head>
-<body style="font-family:system-ui,Arial; padding:24px;">
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{BRAND_AR} | لوحة الأدمن</title>
+</head>
+<body style="font-family:system-ui,Arial; padding:24px; background:#0b1220; color:white;">
+
 <h2>لوحة الأدمن</h2>
-<p><a href="/">رجوع للشات</a></p>
+<p><a href="/" style="color:#22c55e;">رجوع للشات</a></p>
 
-<h3>طلبات طالبي الخدمة</h3>
-<p>الحالة: {"✅ موجود" if req_exists else "❌ لا يوجد بعد"}</p>
-{"<a href='/admin/download/requests'>⬇️ تحميل requests.xlsx</a>" if req_exists else ""}
+<hr>
 
-<hr style="margin:18px 0;"/>
+<h3>📌 آخر 50 طلب</h3>
+<p>إجمالي المعروض: {len(requests_data)}</p>
 
-<h3>بيانات مقدمي الخدمة</h3>
-<p>الحالة: {"✅ موجود" if prov_exists else "❌ لا يوجد بعد"}</p>
-{"<a href='/admin/download/providers'>⬇️ تحميل providers.xlsx</a>" if prov_exists else ""}
+<table border="1" cellpadding="6" cellspacing="0" style="width:100%; background:white; color:black;">
+<tr style="background:#e5e7eb;">
+<th>التاريخ</th>
+<th>القسم</th>
+<th>الخدمة</th>
+<th>الاسم</th>
+<th>الهاتف</th>
+</tr>
+{req_rows}
+</table>
 
-</body></html>"""
+<hr style="margin:30px 0;">
 
+<h3>🧰 آخر 50 مقدم خدمة</h3>
+<p>إجمالي المعروض: {len(providers_data)}</p>
 
-@router.get("/admin/download/{which}")
-def admin_download(request: Request, which: str) -> Response:
-    if request.session.get("admin_ok") is not True:
-        return RedirectResponse("/admin", status_code=303)
+<table border="1" cellpadding="6" cellspacing="0" style="width:100%; background:white; color:black;">
+<tr style="background:#e5e7eb;">
+<th>التاريخ</th>
+<th>الاسم</th>
+<th>الهاتف</th>
+<th>المهنة</th>
+</tr>
+{prov_rows}
+</table>
 
-    if which == "requests":
-        if not REQUESTS_XLSX.exists():
-            return RedirectResponse("/admin", status_code=303)
-        return FileResponse(str(REQUESTS_XLSX), filename="requests.xlsx")
-
-    if which == "providers":
-        if not PROVIDERS_XLSX.exists():
-            return RedirectResponse("/admin", status_code=303)
-        return FileResponse(str(PROVIDERS_XLSX), filename="providers.xlsx")
-
-    return RedirectResponse("/admin", status_code=303)
+</body>
+</html>"""

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional, Tuple
-
+from db import insert_request, insert_provider
 from config import CMD_BACK, CMD_RESTART
 from menus import menu_for_ar
 from models import ChatState
@@ -337,7 +337,20 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
             state.details = text
 
             # ✅ حفظ/تنبيه (قد يأخذ وقت - عندك UI انتظار الآن)
+            # حفظ في Neon
+            insert_request({
+                  "category_name": state.category_name,
+                  "service_name": state.service_name,
+                  "customer_name": state.name,
+                  "customer_phone": state.phone,
+                  "address": state.address,
+                  "details": state.details,
+                  "source": "web_chat"
+             })
+
+            # حفظ في Excel (اختياري احتياطي)
             save_request_to_excel(state)
+
             notify_new_request(state)
 
             confirmation = (
@@ -398,8 +411,21 @@ def bot_reply(request_session: dict, user_text: str, *, brand: str, slogan: str)
                 return "اكتب إجابة واضحة.", False
             state.p_home = text
 
-            save_provider_to_excel(state)
-            notify_new_provider(state)
+            # حفظ في Neon
+            insert_request({
+                 "category_name": state.category_name,
+                 "service_name": state.service_name,
+                 "customer_name": state.name,
+                 "customer_phone": state.phone,
+                 "address": state.address,
+                 "details": state.details,
+                 "source": "web_chat"
+            })
+
+           # حفظ في Excel (اختياري احتياطي)
+            save_request_to_excel(state)
+
+            notify_new_request(state)
 
             confirmation = (
                 "✅ تم تسجيل بياناتك كمقدم خدمة.\n\n"

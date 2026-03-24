@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
-
+from db import init_db
 from admin import router as admin_router
 from bot import bot_reply, prompt_for_step
 from config import BRAND_AR, SESSION_SECRET, SLOGAN_AR
@@ -13,6 +13,7 @@ from models import ChatState
 from ui import render_page
 
 app = FastAPI(title=BRAND_AR)
+init_db()
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
 app.include_router(admin_router)
 
