@@ -139,12 +139,13 @@ def fetch_last_providers(limit: int = 50) -> List[Dict[str, Any]]:
     with conn_ctx() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, created_at,
-                   provider_name,
-                   provider_phone,
+            SELECT id,
+                   created_at,
+                   name,
+                   phone,
                    profession,
                    contrib,
-                   home_make
+                   home
             FROM providers
             ORDER BY created_at DESC, id DESC
             LIMIT %s
