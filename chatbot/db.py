@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List
 
 import psycopg
 from psycopg.rows import dict_row
@@ -33,6 +33,10 @@ def conn_ctx() -> Iterator[psycopg.Connection]:
 
 
 def init_db() -> None:
+    """
+    إنشاء الجداول لو غير موجودة.
+    ملاحظة: لو عندك جدول providers قديم بأعمدة name/phone/home لن يتغير هنا.
+    """
     if not db_enabled():
         return
 
@@ -52,6 +56,8 @@ def init_db() -> None:
             );
             """
         )
+
+        # سكيمة providers "الجديدة"
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS providers (
@@ -72,6 +78,7 @@ def init_db() -> None:
 def insert_request(row: Dict[str, Any]) -> None:
     if not db_enabled():
         return
+
     with conn_ctx() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -81,12 +88,12 @@ def insert_request(row: Dict[str, Any]) -> None:
               (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                str(row["category_name"]),
-                str(row["service_name"]),
-                str(row["customer_name"]),
-                str(row["customer_phone"]),
-                str(row["address"]),
-                str(row["details"]),
+                str(row.get("category_name", "")),
+                str(row.get("service_name", "")),
+                str(row.get("customer_name", "")),
+                str(row.get("customer_phone", "")),
+                str(row.get("address", "")),
+                str(row.get("details", "")),
                 str(row.get("source", "web_chat")),
             ),
         )
@@ -94,22 +101,52 @@ def insert_request(row: Dict[str, Any]) -> None:
 
 
 def insert_provider(row: Dict[str, Any]) -> None:
+    """
+    يدعم سكيمتين:
+    - جديدة: provider_name/provider_phone/home_make
+    - قديمة: name/phone/home
+    """
     if not db_enabled():
         return
+
     with conn_ctx() as conn, conn.cursor() as cur:
+        # حاول السكيمة الجديدة أولاً
+        try:
+            cur.execute(
+                """
+                INSERT INTO providers
+                  (provider_name, provider_phone, profession, contrib, home_make, source)
+                VALUES
+                  (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(row.get("provider_name", "")),
+                    str(row.get("provider_phone", "")),
+                    str(row.get("profession", "")),
+                    str(row.get("contrib", "")),
+                    str(row.get("home_make", "")),
+                    str(row.get("source", "web_chat")),
+                ),
+            )
+            conn.commit()
+            return
+        except psycopg.errors.UndefinedColumn:
+            conn.rollback()
+
+        # Fallback للسكيمة القديمة
         cur.execute(
             """
             INSERT INTO providers
-              (provider_name, provider_phone, profession, contrib, home_make, source)
+              (name, phone, profession, contrib, home, source)
             VALUES
               (%s, %s, %s, %s, %s, %s)
             """,
             (
-                str(row["provider_name"]),
-                str(row["provider_phone"]),
-                str(row["profession"]),
-                str(row["contrib"]),
-                str(row["home_make"]),
+                str(row.get("provider_name", row.get("name", ""))),
+                str(row.get("provider_phone", row.get("phone", ""))),
+                str(row.get("profession", "")),
+                str(row.get("contrib", "")),
+                str(row.get("home_make", row.get("home", ""))),
                 str(row.get("source", "web_chat")),
             ),
         )
@@ -119,6 +156,7 @@ def insert_provider(row: Dict[str, Any]) -> None:
 def fetch_last_requests(limit: int = 50) -> List[Dict[str, Any]]:
     if not db_enabled():
         return []
+
     with conn_ctx() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -132,20 +170,47 @@ def fetch_last_requests(limit: int = 50) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 
-def fetch_last_providers(limit: int = 50):
+def fetch_last_providers(limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    يرجع Keys ثابتة:
+      provider_name, provider_phone, profession, contrib, home_make, created_at, id, source
+    حتى لو جدول Neon قديم أو جديد.
+    """
     if not db_enabled():
         return []
 
     with conn_ctx() as conn, conn.cursor() as cur:
+        # حاول السكيمة الجديدة أولاً
+        try:
+            cur.execute(
+                """
+                SELECT id, created_at,
+                       provider_name,
+                       provider_phone,
+                       profession,
+                       contrib,
+                       home_make,
+                       source
+                FROM providers
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return list(cur.fetchall())
+        except psycopg.errors.UndefinedColumn:
+            conn.rollback()
+
+        # Fallback للسكيمة القديمة
         cur.execute(
             """
-            SELECT id,
-                   created_at,
-                   name,
-                   phone,
+            SELECT id, created_at,
+                   name AS provider_name,
+                   phone AS provider_phone,
                    profession,
                    contrib,
-                   home
+                   home AS home_make,
+                   source
             FROM providers
             ORDER BY created_at DESC, id DESC
             LIMIT %s
