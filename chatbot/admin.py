@@ -60,8 +60,8 @@ def admin_page(request: Request, pin: Optional[str] = None) -> str:
         prov_rows += f"""
         <tr>
             <td>{p['created_at']}</td>
-            <td>{p['provider_name']}</td>
-            <td>{p['provider_phone']}</td>
+            <td>{p['name']}</td>
+            <td>{p['phone']}</td>
             <td>{p['profession']}</td>
         </tr>
         """
