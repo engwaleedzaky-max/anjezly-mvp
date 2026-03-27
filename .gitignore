@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 __pycache__/
 *.pyc
 .venv/
@@ -7,3 +8,9 @@ requests.xlsx
 providers.xlsx
 *.db
 .DS_Store
+=======
+app.db
+__pycache__/
+*.pyc
+templates/
+>>>>>>> 0f8dccfc7d0a398af44d9f0e29cb4d41e2b72b17

@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-from main import app  # uvicorn app:app
-=======
 # file: app.py
 """
 أنجزلي - MVP
@@ -48,7 +45,7 @@ BRAND_PRIMARY = "#0F172A"  # navy
 BRAND_ACCENT = "#16A34A"  # green
 
 # Admin PIN
-ADMIN_PIN = "4321"
+ADMIN_PIN = "1234"
 
 Role = Literal["customer", "provider", "admin"]
 Status = Literal["new", "accepted", "in_progress", "completed", "canceled"]
@@ -89,19 +86,6 @@ def hash_password(password: str, salt: bytes) -> str:
     return dk.hex()
 
 
-def get_session_user(request: Request) -> Optional[SessionUser]:
-    raw = request.session.get("user")
-    if not isinstance(raw, dict):
-        return None
-    role = raw.get("role")
-    name = raw.get("name")
-    if role not in ("customer", "provider", "admin"):
-        return None
-    if not isinstance(name, str) or not name.strip():
-        return None
-    return {"role": role, "name": name.strip()}
-
-
 def template_ctx(request: Request, *, title: str, subtitle: str) -> dict:
     return {
         "request": request,
@@ -115,19 +99,30 @@ def template_ctx(request: Request, *, title: str, subtitle: str) -> dict:
     }
 
 
+def get_session_user(request: Request) -> Optional[SessionUser]:
+    raw = request.session.get("user")
+    if not isinstance(raw, dict):
+        return None
+    role = raw.get("role")
+    name = raw.get("name")
+    if role not in ("customer", "provider", "admin"):
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return {"role": role, "name": name.strip()}
+
+
 def require_role(request: Request, role: Role) -> SessionUser:
     user = get_session_user(request)
     if not user or user["role"] != role:
         raise HTTPException(status_code=403, detail="Not authorized")
     return user
 
-
-def require_role_html(request: Request, role: Role) -> SessionUser | RedirectResponse:
+def require_role_html(request: Request, role: Role) -> SessionUser | RedirectResponse: 
     user = get_session_user(request)
     if not user or user["role"] != role:
         return RedirectResponse("/login?error=يجب+تسجيل+الدخول+كأدمن", status_code=303)
     return user
-
 
 def init_db() -> None:
     with closing(get_conn()) as conn, conn:
@@ -184,6 +179,7 @@ def init_db() -> None:
             """
         )
 
+        # Seed services once
         c = conn.execute("SELECT COUNT(*) AS c FROM services").fetchone()["c"]
         if int(c) == 0:
             now = utc_now()
@@ -260,15 +256,12 @@ def ensure_templates() -> None:
 <body>
   <div class="topbar">
     <div class="brand-wrap">
-   <div class="logo" aria-label="Logo">
-  <svg viewBox="0 0 64 64" aria-label="Anjezly Logo" role="img" fill="none">
-    <circle cx="32" cy="32" r="28" stroke="var(--primary)" stroke-width="3"/>
-    <path d="M36 10L20 34h12l-2 20 18-26H36V10z" fill="var(--accent)"/>
-    <circle cx="46" cy="46" r="9" fill="var(--primary)" opacity="0.92"/>
-    <path d="M42.5 46.2l2.1 2.2 5.2-5.4"
-          stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-</div>
+      <div class="logo" aria-label="Logo">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M13 2L4 14h7l-1 8 10-14h-7l0-6z" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M21 18.2a3.2 3.2 0 0 1-4.8 2.8l-5.5-5.5 2.2-2.2 5.5 5.5a.9.9 0 0 0 1.5-.6v-1.1l1.1-1.1h1.1a.9.9 0 0 0 .6-1.5l-1.2-1.2 1.9-1.9 1.2 1.2a3.2 3.2 0 0 1-2.6 5.4z" fill="var(--primary)" opacity=".9"/>
+        </svg>
+      </div>
       <div>
         <p class="brand-name">{{ brand_name }}</p>
         <p class="slogan">{{ slogan }}</p>
@@ -1085,7 +1078,7 @@ templates = Jinja2Templates(directory="templates")
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET", secrets.token_urlsafe(32)),
+    secret_key=secrets.token_urlsafe(32),
     same_site="lax",
 )
 
@@ -1218,19 +1211,15 @@ def customer_home(request: Request):
     services = list_active_services()
     with closing(get_conn()) as conn:
         rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 10").fetchall()
-
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
+    reqs = [ServiceRequest(
+        id=int(r["id"]),
+        service_name=str(r["service_name"]),
+        description=str(r["description"]),
+        customer_phone=str(r["customer_phone"]),
+        status=r["status"],
+        accepted_by=r["accepted_by"],
+        created_at=str(r["created_at"]),
+    ) for r in rows]
 
     ctx = template_ctx(request, title="واجهة طالب الخدمة", subtitle="أنشئ طلبك بسهولة واختر الخدمة المناسبة.")
     ctx["services"] = services
@@ -1269,22 +1258,19 @@ def provider_dashboard(request: Request):
     require_role(request, "provider")
     with closing(get_conn()) as conn:
         rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 50").fetchall()
-
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
+    reqs = [ServiceRequest(
+        id=int(r["id"]),
+        service_name=str(r["service_name"]),
+        description=str(r["description"]),
+        customer_phone=str(r["customer_phone"]),
+        status=r["status"],
+        accepted_by=r["accepted_by"],
+        created_at=str(r["created_at"]),
+    ) for r in rows]
 
     ctx = template_ctx(request, title="واجهة مقدم الخدمة", subtitle="تابع الطلبات وقم بقبول/تحديث الطلبات.")
     ctx["requests"] = reqs
+    ctx["status_filter"] = ""
     return templates.TemplateResponse("provider.html", ctx)
 
 
@@ -1312,25 +1298,18 @@ def set_status(request: Request, request_id: int, new_status: Status = Form(...)
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     with closing(get_conn()) as conn:
         rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 200").fetchall()
-
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
+    reqs = [ServiceRequest(
+        id=int(r["id"]),
+        service_name=str(r["service_name"]),
+        description=str(r["description"]),
+        customer_phone=str(r["customer_phone"]),
+        status=r["status"],
+        accepted_by=r["accepted_by"],
+        created_at=str(r["created_at"]),
+    ) for r in rows]
 
     ctx = template_ctx(request, title="لوحة الأدمن", subtitle="إدارة الطلبات والخدمات وتعيين مقدمي الخدمة.")
     ctx["requests"] = reqs
@@ -1342,10 +1321,7 @@ def admin_dashboard(request: Request):
 
 @app.post("/admin/services/add")
 def admin_add_service(request: Request, service_name: str = Form(...)):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     add_service(service_name)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1357,34 +1333,23 @@ def admin_assign_provider(
     provider_name: str = Form(...),
     force: Optional[str] = Form(None),
 ):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     providers = set(list_active_providers())
     if provider_name.strip() not in providers:
         raise HTTPException(status_code=400, detail="Provider not registered")
-
     assign_provider_admin(request_id, provider_name=provider_name, force=bool(force))
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/requests/{request_id}/status")
 def admin_set_status(request: Request, request_id: int, new_status: Status = Form(...)):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     update_status_admin(request_id, new_status=new_status)
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/requests/{request_id}/delete")
 def admin_delete_request(request: Request, request_id: int):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     delete_request_admin(request_id)
     return RedirectResponse("/admin", status_code=303)
->>>>>>> 0f8dccfc7d0a398af44d9f0e29cb4d41e2b72b17

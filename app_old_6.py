@@ -1,15 +1,14 @@
-<<<<<<< HEAD
-from main import app  # uvicorn app:app
-=======
 # file: app.py
 """
-أنجزلي - MVP
-- Brand: أنجزلي | اطلبها، وإحنا ننجزها
-- Users: طالب الخدمة (customer) + مقدم الخدمة (provider) register/login with password
-- Admin: login with PIN only
-- Services: dynamic (admin can add continuously)
-- Admin: assign/reassign provider from dropdown with Force option
-- Forgot password: reset codes created via /forgot, visible to admin, used via /reset
+Service Marketplace MVP (Step 6) - Password Registration/Login for customer/provider + Admin PIN
+- Roles:
+  - customer = طالب الخدمة (password)
+  - provider = مقدم الخدمة (password)
+  - admin    = Admin (PIN only)
+- Dynamic services (admin can add)
+- Providers list is derived from users(role='provider')
+- Admin can assign provider from dropdown + Force reassign
+- DB migration supports old service_type and new service_name and old NOT NULL constraints
 
 Run:
   pip install fastapi uvicorn jinja2 python-multipart itsdangerous
@@ -30,7 +29,7 @@ import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional, TypedDict
 
@@ -41,14 +40,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 DB_PATH = Path("app.db")
 
-# Branding
-BRAND_NAME = "أنجزلي"
-SLOGAN = "اطلبها، وإحنا ننجزها"
-BRAND_PRIMARY = "#0F172A"  # navy
-BRAND_ACCENT = "#16A34A"  # green
-
-# Admin PIN
-ADMIN_PIN = "4321"
+# ✅ غيّر PIN كما تريد
+ADMIN_PIN = "1234"
 
 Role = Literal["customer", "provider", "admin"]
 Status = Literal["new", "accepted", "in_progress", "completed", "canceled"]
@@ -76,61 +69,27 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
-def utc_now() -> str:
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(r["name"]) for r in rows}
+
+
+def _utc_now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def new_salt() -> bytes:
-    return os.urandom(16)
-
-
-def hash_password(password: str, salt: bytes) -> str:
+def _hash_password(password: str, salt: bytes) -> str:
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
     return dk.hex()
 
 
-def get_session_user(request: Request) -> Optional[SessionUser]:
-    raw = request.session.get("user")
-    if not isinstance(raw, dict):
-        return None
-    role = raw.get("role")
-    name = raw.get("name")
-    if role not in ("customer", "provider", "admin"):
-        return None
-    if not isinstance(name, str) or not name.strip():
-        return None
-    return {"role": role, "name": name.strip()}
-
-
-def template_ctx(request: Request, *, title: str, subtitle: str) -> dict:
-    return {
-        "request": request,
-        "title": title,
-        "subtitle": subtitle,
-        "brand_name": BRAND_NAME,
-        "slogan": SLOGAN,
-        "brand_primary": BRAND_PRIMARY,
-        "brand_accent": BRAND_ACCENT,
-        "user": get_session_user(request),
-    }
-
-
-def require_role(request: Request, role: Role) -> SessionUser:
-    user = get_session_user(request)
-    if not user or user["role"] != role:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    return user
-
-
-def require_role_html(request: Request, role: Role) -> SessionUser | RedirectResponse:
-    user = get_session_user(request)
-    if not user or user["role"] != role:
-        return RedirectResponse("/login?error=يجب+تسجيل+الدخول+كأدمن", status_code=303)
-    return user
+def _new_salt() -> bytes:
+    return os.urandom(16)
 
 
 def init_db() -> None:
     with closing(get_conn()) as conn, conn:
+        # ---- Orders table (new schema uses service_name) ----
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS service_requests (
@@ -145,6 +104,30 @@ def init_db() -> None:
             """
         )
 
+        # ---- Migration: service_type -> service_name (old versions) ----
+        cols = _table_columns(conn, "service_requests")
+        if "service_name" not in cols:
+            conn.execute("ALTER TABLE service_requests ADD COLUMN service_name TEXT")
+
+        cols = _table_columns(conn, "service_requests")
+        if "service_type" in cols:
+            conn.execute(
+                """
+                UPDATE service_requests
+                SET service_name = service_type
+                WHERE (service_name IS NULL OR service_name = '')
+                """
+            )
+
+        conn.execute(
+            """
+            UPDATE service_requests
+            SET service_name = 'غير محدد'
+            WHERE (service_name IS NULL OR service_name = '')
+            """
+        )
+
+        # ---- Services table ----
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS services (
@@ -156,6 +139,7 @@ def init_db() -> None:
             """
         )
 
+        # ---- Users table (password auth for customer/provider) ----
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -170,23 +154,10 @@ def init_db() -> None:
             """
         )
 
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS password_resets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_name TEXT NOT NULL,
-                role TEXT NOT NULL,
-                code TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-
-        c = conn.execute("SELECT COUNT(*) AS c FROM services").fetchone()["c"]
-        if int(c) == 0:
-            now = utc_now()
+        # ---- Seed default services if empty ----
+        count = conn.execute("SELECT COUNT(*) AS c FROM services").fetchone()["c"]
+        if int(count) == 0:
+            now = _utc_now()
             defaults = [
                 "كهرباء",
                 "سباكة",
@@ -202,6 +173,30 @@ def init_db() -> None:
             )
 
 
+def _row_get(row: sqlite3.Row, *names: str, default: str = "") -> str:
+    keys = set(row.keys())
+    for n in names:
+        if n in keys:
+            v = row[n]
+            if v is None:
+                continue
+            return str(v)
+    return default
+
+
+def row_to_request(row: sqlite3.Row) -> ServiceRequest:
+    service_name = _row_get(row, "service_name", "service_type", default="غير محدد")
+    return ServiceRequest(
+        id=int(row["id"]),
+        service_name=service_name,
+        description=str(row["description"]),
+        customer_phone=str(row["customer_phone"]),
+        status=row["status"],
+        accepted_by=row["accepted_by"],
+        created_at=str(row["created_at"]),
+    )
+
+
 def ensure_templates() -> None:
     Path("templates").mkdir(exist_ok=True)
 
@@ -211,92 +206,52 @@ def ensure_templates() -> None:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ brand_name }} | {{ title }}</title>
+  <title>{{ title }}</title>
   <style>
-    :root{
-      --primary: {{ brand_primary }};
-      --accent: {{ brand_accent }};
-      --muted: #6b7280;
-      --border: #e5e7eb;
-      --shadow: 0 10px 25px rgba(0,0,0,.06);
+    body { font-family: system-ui, Arial; margin: 24px; line-height: 1.6; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 12px 0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    label { display: block; margin-bottom: 6px; font-weight: 600; }
+    input, textarea, select, button {
+      font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc;
+      width: 100%; box-sizing: border-box;
     }
-    body { font-family: system-ui, Arial; margin: 24px; line-height: 1.6; background: #fff; color: #111827; }
-    .card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin: 12px 0; box-shadow: var(--shadow); }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    label { display: block; margin-bottom: 6px; font-weight: 800; }
-    input, textarea, select, button { font: inherit; padding: 10px 12px; border-radius: 12px; border: 1px solid #d1d5db; width: 100%; box-sizing: border-box; background: #fff; }
-    textarea { min-height: 110px; }
-
-    .btn { cursor: pointer; transition: transform .05s ease, opacity .15s ease; }
-    .btn:active { transform: translateY(1px); }
-    .btn-primary { border: none; background: var(--accent); color: #fff; font-weight: 900; }
-    .btn-primary:hover { opacity: .92; }
-    .btn-secondary { background: #fff; border: 1px solid var(--border); }
-    .btn-secondary:hover { border-color: #cbd5e1; }
-    .btn-danger { border: none; background: #b00020; color: #fff; font-weight: 900; }
-    .btn-danger:hover { opacity: .92; }
-
-    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none; color: #111827; background: #fff; transition: background .15s ease, border-color .15s ease; white-space: nowrap; }
-    .badge:hover { background: #f8fafc; border-color: #cbd5e1; }
-    .badge-primary { border-color: rgba(22,163,74,.25); background: rgba(22,163,74,.08); }
-    .muted { color: var(--muted); }
-    .danger { color: #b00020; }
+    textarea { min-height: 100px; }
+    .btn { cursor: pointer; }
+    .btn-primary { border: none; background: #111; color: #fff; }
+    .btn-danger { border: none; background: #b00020; color: #fff; }
+    .btn-secondary { background: #fff; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid #ccc; text-decoration: none; }
+    .muted { color: #666; }
     .split { display: grid; grid-template-columns: 1fr; gap: 12px; }
     @media (min-width: 900px) { .split { grid-template-columns: 1fr 1fr; } }
     .table { width: 100%; border-collapse: collapse; }
-    .table th, .table td { border-bottom: 1px solid #eef2f7; padding: 10px; text-align: right; vertical-align: top; }
-    .table th { background: #f8fafc; }
+    .table th, .table td { border-bottom: 1px solid #eee; padding: 10px; text-align: right; vertical-align: top; }
+    .table th { background: #fafafa; }
     .mini { font-size: 12px; }
-
-    .brand-wrap { display:flex; align-items:center; gap: 12px; }
-    .brand-name { font-size: 28px; font-weight: 900; margin: 0; letter-spacing: .2px; color: var(--primary); }
-    .slogan { margin: 0; color: var(--muted); }
-    .topbar { display:flex; justify-content: space-between; gap: 12px; align-items:center; }
-    .topbar-right { display:flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
-    .logo { width: 44px; height: 44px; border-radius: 14px; background: linear-gradient(135deg, rgba(22,163,74,.18), rgba(15,23,42,.08)); display:flex; align-items:center; justify-content:center; border: 1px solid rgba(15,23,42,.10); }
-    .logo svg { width: 26px; height: 26px; }
+    .danger { color: #b00020; }
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="brand-wrap">
-   <div class="logo" aria-label="Logo">
-  <svg viewBox="0 0 64 64" aria-label="Anjezly Logo" role="img" fill="none">
-    <circle cx="32" cy="32" r="28" stroke="var(--primary)" stroke-width="3"/>
-    <path d="M36 10L20 34h12l-2 20 18-26H36V10z" fill="var(--accent)"/>
-    <circle cx="46" cy="46" r="9" fill="var(--primary)" opacity="0.92"/>
-    <path d="M42.5 46.2l2.1 2.2 5.2-5.4"
-          stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-</div>
-      <div>
-        <p class="brand-name">{{ brand_name }}</p>
-        <p class="slogan">{{ slogan }}</p>
-      </div>
-    </div>
-
-    <div class="topbar-right">
-      <a href="/" class="badge badge-primary">واجهة طالب الخدمة</a>
+  <div class="row" style="justify-content: space-between; align-items: center;">
+    <h2 style="margin:0;">{{ title }}</h2>
+    <div class="row" style="align-items:center;">
+      <a href="/" class="badge">واجهة طالب الخدمة</a>
       <a href="/provider" class="badge">واجهة مقدم الخدمة</a>
       <a href="/admin" class="badge">لوحة الأدمن</a>
       <a href="/register" class="badge">تسجيل</a>
       <a href="/login" class="badge">دخول</a>
-      <a href="/forgot" class="badge">نسيت كلمة المرور</a>
       <a href="/logout" class="badge">خروج</a>
     </div>
   </div>
 
-  <div style="margin-top: 14px;">
-    <h2 style="margin: 0; color: var(--primary);">{{ title }}</h2>
-    <p class="muted">{{ subtitle }}</p>
+  {% if user %}
+    <p class="muted">مسجل كـ: <b>{{ user.name }}</b> ({{ user.role }})</p>
+  {% else %}
+    <p class="muted">غير مسجل دخول.</p>
+  {% endif %}
 
-    {% if user %}
-      <p class="muted">مسجل كـ: <b>{{ user.name }}</b> ({{ user.role }})</p>
-    {% else %}
-      <p class="muted">غير مسجل دخول.</p>
-    {% endif %}
-  </div>
-
+  <p class="muted">{{ subtitle }}</p>
   {% block content %}{% endblock %}
 </body>
 </html>
@@ -307,7 +262,7 @@ def ensure_templates() -> None:
     (Path("templates") / "register.html").write_text(
         """{% extends "base.html" %}
 {% block content %}
-<div class="card" style="max-width: 640px;">
+<div class="card" style="max-width: 620px;">
   <h3 style="margin-top:0;">إنشاء حساب</h3>
   <p class="muted">طالب الخدمة / مقدم الخدمة فقط. (الأدمن عبر PIN في صفحة الدخول).</p>
 
@@ -328,7 +283,7 @@ def ensure_templates() -> None:
 
     <div style="margin-bottom:12px;">
       <label>الاسم (Unique)</label>
-      <input name="name" required />
+      <input name="name" placeholder="مثال: أحمد" required />
     </div>
 
     <div style="margin-bottom:12px;">
@@ -356,7 +311,7 @@ def ensure_templates() -> None:
     (Path("templates") / "login.html").write_text(
         """{% extends "base.html" %}
 {% block content %}
-<div class="card" style="max-width: 640px;">
+<div class="card" style="max-width: 620px;">
   <h3 style="margin-top:0;">تسجيل دخول</h3>
   <p class="muted">طالب الخدمة / مقدم الخدمة بكلمة مرور. الأدمن بـ PIN.</p>
 
@@ -378,7 +333,7 @@ def ensure_templates() -> None:
 
     <div style="margin-bottom:12px;">
       <label>الاسم</label>
-      <input name="name" required />
+      <input name="name" placeholder="مثال: أحمد" required />
     </div>
 
     <div id="pwWrap" style="margin-bottom:12px;">
@@ -416,95 +371,6 @@ def ensure_templates() -> None:
         encoding="utf-8",
     )
 
-    (Path("templates") / "forgot.html").write_text(
-        """{% extends "base.html" %}
-{% block content %}
-<div class="card" style="max-width: 640px;">
-  <h3 style="margin-top:0;">نسيت كلمة المرور</h3>
-  <p class="muted">اكتب اسمك ونوع الحساب. سيتم إنشاء كود Reset ويظهر للأدمن في لوحة الأدمن.</p>
-
-  {% if error %}
-    <div class="card" style="border-color:#b00020;">
-      <b class="danger">خطأ:</b> {{ error }}
-    </div>
-  {% endif %}
-
-  <form method="post" action="/forgot">
-    <div style="margin-bottom:12px;">
-      <label>نوع الحساب</label>
-      <select name="role" required>
-        <option value="customer">طالب الخدمة</option>
-        <option value="provider">مقدم الخدمة</option>
-      </select>
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label>الاسم</label>
-      <input name="name" required />
-    </div>
-
-    <button class="btn btn-primary" type="submit">إنشاء كود</button>
-  </form>
-
-  <p class="muted" style="margin-top:12px;">
-    لديك كود؟ <a class="badge" href="/reset">تغيير كلمة المرور</a>
-  </p>
-</div>
-{% endblock %}
-""",
-        encoding="utf-8",
-    )
-
-    (Path("templates") / "reset.html").write_text(
-        """{% extends "base.html" %}
-{% block content %}
-<div class="card" style="max-width: 640px;">
-  <h3 style="margin-top:0;">تغيير كلمة المرور</h3>
-  <p class="muted">استخدم كود Reset الذي يعطيك إياه الأدمن.</p>
-
-  {% if error %}
-    <div class="card" style="border-color:#b00020;">
-      <b class="danger">خطأ:</b> {{ error }}
-    </div>
-  {% endif %}
-
-  <form method="post" action="/reset">
-    <div style="margin-bottom:12px;">
-      <label>نوع الحساب</label>
-      <select name="role" required>
-        <option value="customer">طالب الخدمة</option>
-        <option value="provider">مقدم الخدمة</option>
-      </select>
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label>الاسم</label>
-      <input name="name" required />
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label>كود Reset</label>
-      <input name="code" placeholder="6 أرقام" required />
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label>كلمة المرور الجديدة</label>
-      <input type="password" name="password" required />
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label>تأكيد كلمة المرور</label>
-      <input type="password" name="password2" required />
-    </div>
-
-    <button class="btn btn-primary" type="submit">حفظ</button>
-  </form>
-</div>
-{% endblock %}
-""",
-        encoding="utf-8",
-    )
-
     (Path("templates") / "customer.html").write_text(
         """{% extends "base.html" %}
 {% block content %}
@@ -531,7 +397,7 @@ def ensure_templates() -> None:
 
         <div style="margin-bottom:12px;">
           <label>وصف الطلب</label>
-          <textarea name="description" placeholder="اشرح طلبك..." required></textarea>
+          <textarea name="description" placeholder="مثال: عطل في مفتاح النور..." required></textarea>
         </div>
 
         <div style="margin-bottom:12px;">
@@ -551,13 +417,13 @@ def ensure_templates() -> None:
     {% else %}
       {% for r in requests %}
         <div class="card" style="margin: 10px 0;">
-          <div class="row" style="justify-content: space-between;">
+          <div class="row" style="justify-content: space-between; align-items:center;">
             <div><b>#{{ r.id }}</b> — {{ r.service_name }}</div>
             <span class="badge">الحالة: {{ r.status }}</span>
           </div>
           <div class="muted">تاريخ: {{ r.created_at }}</div>
           <p>{{ r.description }}</p>
-          <div class="row" style="justify-content: space-between;">
+          <div class="row" style="justify-content: space-between; align-items:center;">
             <div class="muted">هاتف طالب الخدمة: {{ r.customer_phone }}</div>
             <a class="badge" href="/requests/{{ r.id }}">تفاصيل</a>
           </div>
@@ -586,33 +452,51 @@ def ensure_templates() -> None:
 {% else %}
   <div class="card">
     <h3 style="margin-top:0;">واجهة مقدم الخدمة</h3>
-    <p class="muted">أنت مقدم خدمة: <b>{{ user.name }}</b>.</p>
+    <p class="muted">أنت مقدم خدمة: <b>{{ user.name }}</b>. يمكنك قبول الطلبات الجديدة وتحديث طلباتك فقط.</p>
 
-    {% if requests|length == 0 %}
-      <p class="muted">لا توجد طلبات.</p>
-    {% else %}
-      {% for r in requests %}
-        <div class="card">
-          <div class="row" style="justify-content: space-between;">
-            <div><b>#{{ r.id }}</b> — {{ r.service_name }}</div>
-            <span class="badge">الحالة: {{ r.status }}</span>
-          </div>
-          <div class="muted">تاريخ: {{ r.created_at }}</div>
-          <p>{{ r.description }}</p>
-          <div class="row" style="justify-content: space-between;">
-            <div class="muted">هاتف طالب الخدمة: {{ r.customer_phone }}</div>
-            <a class="badge" href="/requests/{{ r.id }}">تفاصيل</a>
-          </div>
-
-          {% if r.status == 'new' %}
-            <form method="post" action="/requests/{{ r.id }}/accept">
-              <button class="btn btn-primary" type="submit">قبول الطلب</button>
-            </form>
-          {% endif %}
-        </div>
-      {% endfor %}
-    {% endif %}
+    <form method="get" action="/provider" class="row" style="align-items:flex-end;">
+      <div style="min-width: 240px;">
+        <label>فلتر الحالة</label>
+        <select name="status">
+          <option value="" {% if not status_filter %}selected{% endif %}>الكل</option>
+          <option value="new" {% if status_filter == 'new' %}selected{% endif %}>new</option>
+          <option value="accepted" {% if status_filter == 'accepted' %}selected{% endif %}>accepted</option>
+          <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>in_progress</option>
+          <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>completed</option>
+          <option value="canceled" {% if status_filter == 'canceled' %}selected{% endif %}>canceled</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" type="submit" style="min-width: 140px;">تحديث</button>
+    </form>
   </div>
+
+  {% if requests|length == 0 %}
+    <p class="muted">لا توجد طلبات.</p>
+  {% else %}
+    {% for r in requests %}
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items:center;">
+          <div><b>#{{ r.id }}</b> — {{ r.service_name }}</div>
+          <span class="badge">الحالة: {{ r.status }}</span>
+        </div>
+        <div class="muted">تاريخ: {{ r.created_at }}</div>
+        <p>{{ r.description }}</p>
+        <div class="row" style="justify-content: space-between; align-items:center;">
+          <div class="muted">هاتف طالب الخدمة: {{ r.customer_phone }}</div>
+          <a class="badge" href="/requests/{{ r.id }}">تفاصيل</a>
+        </div>
+        {% if r.accepted_by %}
+          <div class="muted">مقدم الخدمة: {{ r.accepted_by }}</div>
+        {% endif %}
+
+        {% if r.status == 'new' %}
+          <form method="post" action="/requests/{{ r.id }}/accept">
+            <button class="btn btn-primary" type="submit">قبول الطلب</button>
+          </form>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endif %}
 {% endif %}
 {% endblock %}
 """,
@@ -623,7 +507,7 @@ def ensure_templates() -> None:
         """{% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <div class="row" style="justify-content: space-between;">
+  <div class="row" style="justify-content: space-between; align-items:center;">
     <div><b>طلب #{{ r.id }}</b> — {{ r.service_name }}</div>
     <span class="badge">الحالة: {{ r.status }}</span>
   </div>
@@ -646,6 +530,7 @@ def ensure_templates() -> None:
 
   {% if not user or user.role != 'provider' %}
     <p class="muted">يجب تسجيل الدخول كمقدم خدمة لتحديث الحالة.</p>
+    <a class="badge" href="/login">تسجيل دخول</a>
   {% else %}
     <div class="row">
       {% if r.status == 'accepted' %}
@@ -670,6 +555,11 @@ def ensure_templates() -> None:
       {% endif %}
     </div>
   {% endif %}
+
+  <div class="row" style="justify-content: space-between; align-items:center; margin-top: 12px;">
+    <a class="badge" href="/provider">واجهة مقدم الخدمة</a>
+    <a class="badge" href="/">واجهة طالب الخدمة</a>
+  </div>
 </div>
 {% endblock %}
 """,
@@ -686,13 +576,18 @@ def ensure_templates() -> None:
     <a class="badge" href="/login">اذهب لتسجيل الدخول</a>
   </div>
 {% else %}
+  <div class="card">
+    <h3 style="margin-top:0;">لوحة الأدمن</h3>
+    <p class="muted">إدارة الطلبات + تعيين مقدم الخدمة + إدارة الخدمات.</p>
+  </div>
+
   <div class="split">
     <div class="card">
       <h3 style="margin-top:0;">إضافة خدمة جديدة</h3>
       <form method="post" action="/admin/services/add" class="row" style="align-items:flex-end;">
         <div style="flex:1; min-width: 260px;">
           <label>اسم الخدمة</label>
-          <input name="service_name" required />
+          <input name="service_name" placeholder="مثال: دهانات / حدادة ..." required />
         </div>
         <button class="btn btn-primary" type="submit" style="min-width: 160px;">إضافة</button>
       </form>
@@ -708,7 +603,7 @@ def ensure_templates() -> None:
     <div class="card">
       <h3 style="margin-top:0;">مقدمو الخدمة المسجلون</h3>
       {% if providers|length == 0 %}
-        <p class="muted">لا يوجد مقدمو خدمة بعد (سجّل حساب كمقدم خدمة).</p>
+        <p class="muted">لا يوجد مقدمو خدمة بعد (سجّل حساب كمقدم خدمة لإضافته).</p>
       {% else %}
         <div class="row" style="gap:6px;">
           {% for p in providers %}
@@ -720,38 +615,27 @@ def ensure_templates() -> None:
   </div>
 
   <div class="card">
-    <h3 style="margin-top:0;">أكواد استعادة كلمة المرور (Reset)</h3>
-    {% if reset_codes|length == 0 %}
-      <p class="muted">لا توجد أكواد.</p>
-    {% else %}
-      <table class="table">
-        <thead>
-          <tr>
-            <th>الاسم</th><th>الدور</th><th>الكود</th><th>ينتهي</th><th>مستخدم</th><th>تاريخ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for x in reset_codes %}
-          <tr>
-            <td><b>{{ x.user_name }}</b></td>
-            <td class="muted">{{ x.role }}</td>
-            <td><span class="badge badge-primary">{{ x.code }}</span></td>
-            <td class="muted">{{ x.expires_at }}</td>
-            <td class="muted">{{ x.used }}</td>
-            <td class="muted">{{ x.created_at }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endif %}
+    <h3 style="margin-top:0;">الطلبات</h3>
+    <form method="get" action="/admin" class="row" style="align-items:flex-end;">
+      <div style="min-width: 240px;">
+        <label>فلتر الحالة</label>
+        <select name="status">
+          <option value="" {% if not status_filter %}selected{% endif %}>الكل</option>
+          <option value="new" {% if status_filter == 'new' %}selected{% endif %}>new</option>
+          <option value="accepted" {% if status_filter == 'accepted' %}selected{% endif %}>accepted</option>
+          <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>in_progress</option>
+          <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>completed</option>
+          <option value="canceled" {% if status_filter == 'canceled' %}selected{% endif %}>canceled</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" type="submit" style="min-width: 140px;">تحديث</button>
+    </form>
   </div>
 
-  <div class="card">
-    <h3 style="margin-top:0;">الطلبات</h3>
-
-    {% if requests|length == 0 %}
-      <p class="muted">لا توجد طلبات.</p>
-    {% else %}
+  {% if requests|length == 0 %}
+    <p class="muted">لا توجد طلبات.</p>
+  {% else %}
+    <div class="card">
       <table class="table">
         <thead>
           <tr>
@@ -809,18 +693,40 @@ def ensure_templates() -> None:
                   <button class="btn btn-danger" type="submit">حذف</button>
                 </form>
               </div>
+
+              {% if providers|length == 0 %}
+                <p class="muted mini">لا يمكن التعيين لأن قائمة مقدمي الخدمة فارغة.</p>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
-    {% endif %}
-  </div>
+    </div>
+  {% endif %}
 {% endif %}
 {% endblock %}
 """,
         encoding="utf-8",
     )
+
+
+def get_session_user(request: Request) -> Optional[SessionUser]:
+    raw = request.session.get("user")
+    if not isinstance(raw, dict):
+        return None
+    role = raw.get("role")
+    name = raw.get("name")
+    if role not in ("customer", "provider", "admin") or not isinstance(name, str) or not name.strip():
+        return None
+    return {"role": role, "name": name.strip()}
+
+
+def require_role(request: Request, role: Role) -> SessionUser:
+    user = get_session_user(request)
+    if not user or user["role"] != role:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return user
 
 
 def list_active_services() -> list[str]:
@@ -835,7 +741,7 @@ def add_service(name: str) -> None:
     name = name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="service_name is required")
-    now = utc_now()
+    now = _utc_now()
     with closing(get_conn()) as conn, conn:
         try:
             conn.execute(
@@ -846,9 +752,17 @@ def add_service(name: str) -> None:
             raise HTTPException(status_code=409, detail="Service already exists") from None
 
 
+def list_active_providers() -> list[str]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            "SELECT name FROM users WHERE is_active = 1 AND role = 'provider' ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [str(r["name"]) for r in rows]
+
+
 def create_user(name: str, role: Role, password: str) -> None:
     if role not in ("customer", "provider"):
-        raise HTTPException(status_code=400, detail="Invalid role")
+        raise HTTPException(status_code=400, detail="Invalid role for registration")
 
     name = name.strip()
     if len(name) < 2:
@@ -857,9 +771,9 @@ def create_user(name: str, role: Role, password: str) -> None:
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 chars")
 
-    salt = new_salt()
-    password_hash = hash_password(password, salt)
-    now = utc_now()
+    salt = _new_salt()
+    password_hash = _hash_password(password, salt)
+    now = _utc_now()
 
     with closing(get_conn()) as conn, conn:
         try:
@@ -881,7 +795,11 @@ def authenticate_user(name: str, role: Role, password: str) -> bool:
 
     with closing(get_conn()) as conn:
         row = conn.execute(
-            "SELECT password_hash, salt_hex, is_active FROM users WHERE name = ? AND role = ?",
+            """
+            SELECT password_hash, salt_hex, is_active
+            FROM users
+            WHERE name = ? AND role = ?
+            """,
             (name, role),
         ).fetchone()
 
@@ -890,99 +808,8 @@ def authenticate_user(name: str, role: Role, password: str) -> bool:
 
     salt = bytes.fromhex(str(row["salt_hex"]))
     expected = str(row["password_hash"])
-    got = hash_password(password, salt)
+    got = _hash_password(password, salt)
     return hmac.compare_digest(expected, got)
-
-
-def list_active_providers() -> list[str]:
-    with closing(get_conn()) as conn:
-        rows = conn.execute(
-            "SELECT name FROM users WHERE is_active = 1 AND role = 'provider' ORDER BY name COLLATE NOCASE"
-        ).fetchall()
-    return [str(r["name"]) for r in rows]
-
-
-def create_reset_code(name: str, role: Role, ttl_minutes: int = 10) -> str:
-    if role not in ("customer", "provider"):
-        raise HTTPException(status_code=400, detail="Invalid role")
-    name = name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Name required")
-
-    with closing(get_conn()) as conn:
-        row = conn.execute(
-            "SELECT id FROM users WHERE name = ? AND role = ? AND is_active = 1",
-            (name, role),
-        ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    now = utc_now()
-    expires_at = (datetime.fromisoformat(now) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
-
-    with closing(get_conn()) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO password_resets (user_name, role, code, expires_at, used, created_at)
-            VALUES (?, ?, ?, ?, 0, ?)
-            """,
-            (name, role, code, expires_at, now),
-        )
-    return code
-
-
-def reset_password_with_code(name: str, role: Role, code: str, new_password: str) -> None:
-    if role not in ("customer", "provider"):
-        raise HTTPException(status_code=400, detail="Invalid role")
-
-    name = name.strip()
-    code = code.strip()
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 chars")
-
-    now = utc_now()
-
-    with closing(get_conn()) as conn, conn:
-        row = conn.execute(
-            """
-            SELECT id, expires_at, used
-            FROM password_resets
-            WHERE user_name = ? AND role = ? AND code = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (name, role, code),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=400, detail="Invalid code")
-        if int(row["used"]) == 1:
-            raise HTTPException(status_code=409, detail="Code already used")
-        if str(row["expires_at"]) < now:
-            raise HTTPException(status_code=409, detail="Code expired")
-
-        salt = new_salt()
-        password_hash = hash_password(new_password, salt)
-
-        conn.execute(
-            "UPDATE users SET password_hash = ?, salt_hex = ? WHERE name = ? AND role = ?",
-            (password_hash, salt.hex(), name, role),
-        )
-        conn.execute("UPDATE password_resets SET used = 1 WHERE id = ?", (int(row["id"]),))
-
-
-def list_recent_reset_codes(limit: int = 20) -> list[dict]:
-    with closing(get_conn()) as conn:
-        rows = conn.execute(
-            """
-            SELECT user_name, role, code, expires_at, used, created_at
-            FROM password_resets
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def get_request_by_id(request_id: int) -> ServiceRequest:
@@ -990,24 +817,14 @@ def get_request_by_id(request_id: int) -> ServiceRequest:
         row = conn.execute("SELECT * FROM service_requests WHERE id = ?", (request_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Request not found")
-    return ServiceRequest(
-        id=int(row["id"]),
-        service_name=str(row["service_name"]),
-        description=str(row["description"]),
-        customer_phone=str(row["customer_phone"]),
-        status=row["status"],
-        accepted_by=row["accepted_by"],
-        created_at=str(row["created_at"]),
-    )
+    return row_to_request(row)
 
 
 def update_status_provider(request_id: int, *, new_status: Status, provider_name: str) -> None:
     provider_name = provider_name.strip()
+
     with closing(get_conn()) as conn, conn:
-        row = conn.execute(
-            "SELECT status, accepted_by FROM service_requests WHERE id = ?",
-            (request_id,),
-        ).fetchone()
+        row = conn.execute("SELECT status, accepted_by FROM service_requests WHERE id = ?", (request_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Request not found")
 
@@ -1030,8 +847,9 @@ def update_status_provider(request_id: int, *, new_status: Status, provider_name
                 raise HTTPException(status_code=409, detail="Already accepted")
             accepted_by = provider_name
 
-        if current in ("accepted", "in_progress") and accepted_by != provider_name:
-            raise HTTPException(status_code=403, detail="Not your order")
+        if current in ("accepted", "in_progress"):
+            if accepted_by != provider_name:
+                raise HTTPException(status_code=403, detail="Not your order")
 
         conn.execute(
             "UPDATE service_requests SET status = ?, accepted_by = ? WHERE id = ?",
@@ -1051,6 +869,7 @@ def update_status_admin(request_id: int, *, new_status: Status) -> None:
                 (request_id,),
             )
             return
+
         conn.execute("UPDATE service_requests SET status = ? WHERE id = ?", (new_status, request_id))
 
 
@@ -1069,6 +888,7 @@ def assign_provider_admin(request_id: int, *, provider_name: str, force: bool) -
             raise HTTPException(status_code=409, detail="Use force to reassign completed/canceled")
 
         new_status = "accepted" if current == "new" else current
+
         conn.execute(
             "UPDATE service_requests SET accepted_by = ?, status = ? WHERE id = ?",
             (provider_name, new_status, request_id),
@@ -1080,12 +900,12 @@ def delete_request_admin(request_id: int) -> None:
         conn.execute("DELETE FROM service_requests WHERE id = ?", (request_id,))
 
 
-app = FastAPI(title=BRAND_NAME)
+app = FastAPI(title="Service Marketplace MVP")
 templates = Jinja2Templates(directory="templates")
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET", secrets.token_urlsafe(32)),
+    secret_key=secrets.token_urlsafe(32),
     same_site="lax",
 )
 
@@ -1098,9 +918,16 @@ def _startup() -> None:
 
 @app.get("/register", response_class=HTMLResponse)
 def register_page(request: Request, error: Optional[str] = None):
-    ctx = template_ctx(request, title="التسجيل", subtitle="إنشاء حساب لطالب الخدمة أو مقدم الخدمة.")
-    ctx["error"] = error
-    return templates.TemplateResponse("register.html", ctx)
+    return templates.TemplateResponse(
+        "register.html",
+        {
+            "request": request,
+            "title": "التسجيل",
+            "subtitle": "إنشاء حساب لطالب الخدمة أو مقدم الخدمة.",
+            "user": get_session_user(request),
+            "error": error,
+        },
+    )
 
 
 @app.post("/register")
@@ -1123,14 +950,23 @@ def register_submit(
         return RedirectResponse(f"/register?error={str(e.detail).replace(' ', '+')}", status_code=303)
 
     request.session["user"] = {"role": role, "name": name.strip()}
-    return RedirectResponse("/provider" if role == "provider" else "/", status_code=303)
+    if role == "provider":
+        return RedirectResponse("/provider", status_code=303)
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, error: Optional[str] = None):
-    ctx = template_ctx(request, title="تسجيل الدخول", subtitle="دخول بكلمة مرور لطالب/مقدم الخدمة، و PIN للأدمن.")
-    ctx["error"] = error
-    return templates.TemplateResponse("login.html", ctx)
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "title": "تسجيل الدخول",
+            "subtitle": "دخول بكلمة مرور لطالب/مقدم الخدمة، و PIN للأدمن.",
+            "user": get_session_user(request),
+            "error": error,
+        },
+    )
 
 
 @app.post("/login")
@@ -1170,72 +1006,23 @@ def logout(request: Request):
     return RedirectResponse("/login", status_code=303)
 
 
-@app.get("/forgot", response_class=HTMLResponse)
-def forgot_page(request: Request, error: Optional[str] = None):
-    ctx = template_ctx(request, title="نسيت كلمة المرور", subtitle="إنشاء كود Reset عبر الأدمن.")
-    ctx["error"] = error
-    return templates.TemplateResponse("forgot.html", ctx)
-
-
-@app.post("/forgot")
-def forgot_submit(request: Request, role: Role = Form(...), name: str = Form(...)):
-    try:
-        create_reset_code(name=name, role=role)
-    except HTTPException as e:
-        return RedirectResponse(f"/forgot?error={str(e.detail).replace(' ', '+')}", status_code=303)
-    return RedirectResponse("/login?error=تم+إنشاء+كود+Reset.+تواصل+مع+الأدمن", status_code=303)
-
-
-@app.get("/reset", response_class=HTMLResponse)
-def reset_page(request: Request, error: Optional[str] = None):
-    ctx = template_ctx(request, title="تغيير كلمة المرور", subtitle="استخدم كود Reset من الأدمن.")
-    ctx["error"] = error
-    return templates.TemplateResponse("reset.html", ctx)
-
-
-@app.post("/reset")
-def reset_submit(
-    request: Request,
-    role: Role = Form(...),
-    name: str = Form(...),
-    code: str = Form(...),
-    password: str = Form(...),
-    password2: str = Form(...),
-):
-    if password != password2:
-        return RedirectResponse("/reset?error=كلمتا+المرور+غير+متطابقتين", status_code=303)
-
-    try:
-        reset_password_with_code(name=name, role=role, code=code, new_password=password)
-    except HTTPException as e:
-        return RedirectResponse(f"/reset?error={str(e.detail).replace(' ', '+')}", status_code=303)
-
-    return RedirectResponse("/login?error=تم+تغيير+كلمة+المرور.+سجل+دخول", status_code=303)
-
-
 @app.get("/", response_class=HTMLResponse)
 def customer_home(request: Request):
     services = list_active_services()
     with closing(get_conn()) as conn:
         rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 10").fetchall()
-
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
-
-    ctx = template_ctx(request, title="واجهة طالب الخدمة", subtitle="أنشئ طلبك بسهولة واختر الخدمة المناسبة.")
-    ctx["services"] = services
-    ctx["requests"] = reqs
-    return templates.TemplateResponse("customer.html", ctx)
+    reqs = [row_to_request(r) for r in rows]
+    return templates.TemplateResponse(
+        "customer.html",
+        {
+            "request": request,
+            "title": "تطبيق خدمات (نسخة بسيطة)",
+            "subtitle": "طالب الخدمة ينشئ طلب خدمة، والخدمات تُدار من الأدمن.",
+            "requests": reqs,
+            "services": services,
+            "user": get_session_user(request),
+        },
+    )
 
 
 @app.post("/requests")
@@ -1252,48 +1039,80 @@ def create_request(
     if service_name not in services:
         raise HTTPException(status_code=400, detail="Unknown service. Add it via admin.")
 
-    created_at = utc_now()
+    created_at = _utc_now()
+
     with closing(get_conn()) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO service_requests (service_name, description, customer_phone, status, created_at)
-            VALUES (?, ?, ?, 'new', ?)
-            """,
-            (service_name, description.strip(), customer_phone.strip(), created_at),
-        )
+        cols = _table_columns(conn, "service_requests")
+
+        if "service_type" in cols:
+            # ✅ توافق مع DB القديمة التي لديها service_type NOT NULL
+            conn.execute(
+                """
+                INSERT INTO service_requests (service_name, service_type, description, customer_phone, status, created_at)
+                VALUES (?, ?, ?, ?, 'new', ?)
+                """,
+                (service_name, service_name, description.strip(), customer_phone.strip(), created_at),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO service_requests (service_name, description, customer_phone, status, created_at)
+                VALUES (?, ?, ?, 'new', ?)
+                """,
+                (service_name, description.strip(), customer_phone.strip(), created_at),
+            )
+
     return RedirectResponse("/", status_code=303)
 
 
 @app.get("/provider", response_class=HTMLResponse)
-def provider_dashboard(request: Request):
-    require_role(request, "provider")
+def provider_dashboard(request: Request, status: Optional[str] = None):
+    user = get_session_user(request)
+    status_filter = (status or "").strip()
+
+    query = "SELECT * FROM service_requests"
+    params: list[str] = []
+    where: list[str] = []
+
+    if status_filter:
+        where.append("status = ?")
+        params.append(status_filter)
+
+    if where:
+        query += " WHERE " + " AND ".join(where)
+
+    query += " ORDER BY id DESC LIMIT 50"
+
     with closing(get_conn()) as conn:
-        rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 50").fetchall()
+        rows = conn.execute(query, params).fetchall()
 
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
-
-    ctx = template_ctx(request, title="واجهة مقدم الخدمة", subtitle="تابع الطلبات وقم بقبول/تحديث الطلبات.")
-    ctx["requests"] = reqs
-    return templates.TemplateResponse("provider.html", ctx)
+    reqs = [row_to_request(r) for r in rows]
+    return templates.TemplateResponse(
+        "provider.html",
+        {
+            "request": request,
+            "title": "واجهة مقدم الخدمة",
+            "subtitle": "قبول الطلبات الجديدة وتحديث طلباتك فقط.",
+            "requests": reqs,
+            "status_filter": status_filter,
+            "user": user,
+        },
+    )
 
 
 @app.get("/requests/{request_id}", response_class=HTMLResponse)
 def request_details(request: Request, request_id: int):
     r = get_request_by_id(request_id)
-    ctx = template_ctx(request, title="تفاصيل الطلب", subtitle="عرض تفاصيل الطلب والتحكم في حالته.")
-    ctx["r"] = r
-    return templates.TemplateResponse("details.html", ctx)
+    return templates.TemplateResponse(
+        "details.html",
+        {
+            "request": request,
+            "title": "تفاصيل الطلب",
+            "subtitle": "تفاصيل الطلب وتحديث الحالة لمقدم الخدمة.",
+            "r": r,
+            "user": get_session_user(request),
+        },
+    )
 
 
 @app.post("/requests/{request_id}/accept")
@@ -1311,41 +1130,45 @@ def set_status(request: Request, request_id: int, new_status: Status = Form(...)
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
+def admin_dashboard(request: Request, status: Optional[str] = None):
+    user = get_session_user(request)
+    status_filter = (status or "").strip()
+
+    query = "SELECT * FROM service_requests"
+    params: list[str] = []
+    where: list[str] = []
+
+    if status_filter:
+        where.append("status = ?")
+        params.append(status_filter)
+
+    if where:
+        query += " WHERE " + " AND ".join(where)
+
+    query += " ORDER BY id DESC LIMIT 200"
 
     with closing(get_conn()) as conn:
-        rows = conn.execute("SELECT * FROM service_requests ORDER BY id DESC LIMIT 200").fetchall()
+        rows = conn.execute(query, params).fetchall()
 
-    reqs = [
-        ServiceRequest(
-            id=int(r["id"]),
-            service_name=str(r["service_name"]),
-            description=str(r["description"]),
-            customer_phone=str(r["customer_phone"]),
-            status=r["status"],
-            accepted_by=r["accepted_by"],
-            created_at=str(r["created_at"]),
-        )
-        for r in rows
-    ]
-
-    ctx = template_ctx(request, title="لوحة الأدمن", subtitle="إدارة الطلبات والخدمات وتعيين مقدمي الخدمة.")
-    ctx["requests"] = reqs
-    ctx["providers"] = list_active_providers()
-    ctx["services"] = list_active_services()
-    ctx["reset_codes"] = list_recent_reset_codes()
-    return templates.TemplateResponse("admin.html", ctx)
+    reqs = [row_to_request(r) for r in rows]
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "title": "لوحة الأدمن",
+            "subtitle": "إدارة الطلبات + تعيين مقدم الخدمة + إدارة الخدمات.",
+            "requests": reqs,
+            "status_filter": status_filter,
+            "user": user,
+            "providers": list_active_providers(),
+            "services": list_active_services(),
+        },
+    )
 
 
 @app.post("/admin/services/add")
 def admin_add_service(request: Request, service_name: str = Form(...)):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     add_service(service_name)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1357,34 +1180,23 @@ def admin_assign_provider(
     provider_name: str = Form(...),
     force: Optional[str] = Form(None),
 ):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     providers = set(list_active_providers())
     if provider_name.strip() not in providers:
         raise HTTPException(status_code=400, detail="Provider not registered")
-
     assign_provider_admin(request_id, provider_name=provider_name, force=bool(force))
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/requests/{request_id}/status")
 def admin_set_status(request: Request, request_id: int, new_status: Status = Form(...)):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     update_status_admin(request_id, new_status=new_status)
     return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/requests/{request_id}/delete")
 def admin_delete_request(request: Request, request_id: int):
-    auth = require_role_html(request, "admin")
-    if isinstance(auth, RedirectResponse):
-        return auth
-
+    require_role(request, "admin")
     delete_request_admin(request_id)
     return RedirectResponse("/admin", status_code=303)
->>>>>>> 0f8dccfc7d0a398af44d9f0e29cb4d41e2b72b17

@@ -1,15 +1,6 @@
-<<<<<<< HEAD
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 starlette>=0.40,<1.0
 python-multipart>=0.0.9,<1.0
 openpyxl>=3.1,<4.0
 psycopg[binary]>=3.2,<4.0
-itsdangerous>=2.2.0
-=======
-fastapi
-uvicorn
-jinja2
-python-multipart
-itsdangerous
->>>>>>> 0f8dccfc7d0a398af44d9f0e29cb4d41e2b72b17
